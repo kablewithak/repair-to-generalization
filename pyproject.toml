@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repair-to-generalization"
+version = "0.1.0"
+description = "Empirical research on post-admission drift in AI agent experience"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+rtg-subq-preflight = "repair_to_generalization.preflight:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
