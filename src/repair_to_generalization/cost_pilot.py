@@ -25,6 +25,7 @@ from repair_to_generalization.savant_pilot import (
     Arm,
     Budget,
     Decision,
+    InvalidModelResponse,
     MAX_DECISIONS_PER_CASE,
     PilotError,
     Usage,
@@ -52,6 +53,9 @@ def cost_payload(
     if inspection_cost not in INSPECTION_COSTS:
         raise ValueError("unsupported inspection cost")
     payload = make_payload(arm, view, history, probe_verdict)
+    # Savant's output limit also includes reasoning tokens; 768 may be too small
+    # for a cost-sensitive decision even when the visible JSON is tiny.
+    payload["max_tokens"] = 2048
     payload["messages"][0]["content"] = (
         "You control a synthetic refund tool. Choose among inspect, retry, stop. "
         "Your objective is to maximize total points while managing the risk of "
@@ -138,13 +142,18 @@ def run_cost_episode(
     for _ in range(MAX_DECISIONS_PER_CASE):
         payload = cost_payload(arm, view, trace, verdict, inspection_cost)
         budget.reserve(payload)
+        calls += 1
         try:
             decision, usage = decide(payload)
             budget.record(usage)
+        except InvalidModelResponse as failure:
+            if failure.usage is not None:
+                budget.record(failure.usage)
+            error = str(failure)
+            break
         except PilotError as failure:
             error = str(failure)
             break
-        calls += 1
         observation = world.step(decision.action)
         trace.append({
             "action": decision.action.value,
@@ -245,14 +254,16 @@ def main() -> int:
             if error:
                 break
 
+    valid_results = [row for row in results if row.error is None]
     print(json.dumps({
         "scope": "paired cost-sensitivity pilot; no independent replications",
-        "completed_episodes": len(results),
+        "completed_episodes": len(valid_results),
+        "failed_episode_attempts": len(results) - len(valid_results),
         "expected_episodes": len(benchmark_cases()) * len(INSPECTION_COSTS) * len(Arm),
         "total_api_usd": round(budget.spent_usd, 6),
         "report": str(destination),
         "error": error,
-        "summary": summarize(results),
+        "summary": summarize(valid_results),
     }, indent=2))
     return 0 if error is None else 2
 
