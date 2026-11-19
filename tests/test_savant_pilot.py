@@ -8,6 +8,7 @@ from repair_to_generalization.savant_pilot import (
     Arm,
     Budget,
     Decision,
+    InvalidModelResponse,
     PilotError,
     Usage,
     make_payload,
@@ -64,8 +65,10 @@ class SavantPilotTests(unittest.TestCase):
         self.assertEqual(action.action, Action.INSPECT)
         self.assertGreater(usage.usd, 0)
         completion["choices"][0]["finish_reason"] = "length"
-        with self.assertRaises(PilotError):
+        with self.assertRaises(InvalidModelResponse) as raised:
             parse_completion(completion)
+        self.assertEqual(str(raised.exception), "invalid_model_response:output_limit")
+        self.assertEqual(raised.exception.usage.completion_tokens, 50)
 
     def test_budget_blocks_calls_before_network(self):
         payload = make_payload(

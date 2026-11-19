@@ -8,6 +8,7 @@ from repair_to_generalization.cost_pilot import (
 )
 from repair_to_generalization.refund_simulator import Action, RefundCase, RefundSimulator, ToolSemantics
 from repair_to_generalization.savant_pilot import Decision, Usage
+from repair_to_generalization.savant_pilot import InvalidModelResponse
 
 
 class CostPilotTests(unittest.TestCase):
@@ -55,6 +56,20 @@ class CostPilotTests(unittest.TestCase):
         rows = summarize([outcome(1), outcome(8)])
         self.assertEqual({row["inspect_cost"] for row in rows}, set(INSPECTION_COSTS))
         self.assertEqual([row["mean_live_cost_units"] for row in rows], [2.0, 9.0])
+
+    def test_invalid_response_is_billed_and_not_counted_as_success(self):
+        case = RefundCase("x", ToolSemantics.NON_IDEMPOTENT, True, False)
+        budget = Budget()
+
+        def truncated(_payload):
+            raise InvalidModelResponse("output_limit", Usage(500, 0, 768))
+
+        result = run_cost_episode(case, Arm.NO_MEMORY, 8, decide=truncated, budget=budget)
+        self.assertEqual(result.error, "invalid_model_response:output_limit")
+        self.assertEqual(result.model_calls, 1)
+        self.assertFalse(result.completed)
+        self.assertFalse(result.success)
+        self.assertGreater(result.billed_usd, 0)
 
 
 if __name__ == "__main__":
