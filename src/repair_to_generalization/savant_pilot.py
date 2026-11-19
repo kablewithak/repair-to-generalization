@@ -46,6 +46,14 @@ class PilotError(RuntimeError):
     """A bounded API, response-contract, or expenditure failure."""
 
 
+class InvalidModelResponse(PilotError):
+    """Model output violated the contract; usage is still billable when present."""
+
+    def __init__(self, reason: str, usage: Usage | None = None) -> None:
+        super().__init__(f"invalid_model_response:{reason}")
+        self.usage = usage
+
+
 @dataclass(frozen=True)
 class Decision:
     action: Action
@@ -80,9 +88,10 @@ class Budget:
             raise PilotError("call_limit_reached")
         # Conservative ASCII-bound: at most one token per UTF-8 byte, plus output.
         input_upper = len(json.dumps(payload, ensure_ascii=True).encode("utf-8"))
+        output_limit = payload.get("max_tokens", MAX_OUTPUT_TOKENS)
         upper_cost = (
             input_upper * INPUT_PER_MILLION
-            + MAX_OUTPUT_TOKENS * OUTPUT_PER_MILLION
+            + output_limit * OUTPUT_PER_MILLION
         ) / 1_000_000
         if self.spent_usd + upper_cost > self.max_usd:
             raise PilotError("dollar_limit_reached")
@@ -166,15 +175,6 @@ def make_payload(arm: Arm, view: object, history: list[dict[str, Any]],
 
 def parse_completion(data: dict[str, Any]) -> tuple[Decision, Usage]:
     try:
-        choice = data["choices"][0]
-        if choice["finish_reason"] != "stop":
-            raise ValueError("incomplete_response")
-        decision_data = json.loads(choice["message"]["content"])
-        if not isinstance(decision_data, dict) or set(decision_data) != {"action", "reason_code"}:
-            raise ValueError("invalid_fields")
-        action = Action(decision_data["action"])
-        if decision_data["reason_code"] not in SCHEMA["properties"]["reason_code"]["enum"]:
-            raise ValueError("invalid_reason_code")
         usage_data = data["usage"]
         prompt = usage_data["prompt_tokens"]
         completion = usage_data["completion_tokens"]
@@ -182,9 +182,36 @@ def parse_completion(data: dict[str, Any]) -> tuple[Decision, Usage]:
         cached = cached_details.get("cached_tokens", 0)
         if any(type(value) is not int or value < 0 for value in (prompt, completion, cached)) or cached > prompt:
             raise ValueError("invalid_token_usage")
-        return Decision(action=action, reason_code=decision_data["reason_code"]), Usage(prompt, cached, completion)
-    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as error:
-        raise PilotError("invalid_model_response") from error
+        usage = Usage(prompt, cached, completion)
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        raise InvalidModelResponse("invalid_usage") from error
+
+    try:
+        choice = data["choices"][0]
+        if choice["finish_reason"] == "length":
+            raise InvalidModelResponse("output_limit", usage)
+        if choice["finish_reason"] != "stop":
+            raise InvalidModelResponse("unexpected_finish_reason", usage)
+        content = choice["message"]["content"]
+        if not isinstance(content, str) or not content:
+            raise InvalidModelResponse("empty_content", usage)
+        try:
+            decision_data = json.loads(content)
+        except json.JSONDecodeError:
+            raise InvalidModelResponse("non_json", usage) from None
+        if not isinstance(decision_data, dict) or set(decision_data) != {"action", "reason_code"}:
+            raise InvalidModelResponse("invalid_fields", usage)
+        try:
+            action = Action(decision_data["action"])
+        except (ValueError, TypeError):
+            raise InvalidModelResponse("invalid_action", usage) from None
+        if decision_data["reason_code"] not in SCHEMA["properties"]["reason_code"]["enum"]:
+            raise InvalidModelResponse("invalid_reason_code", usage)
+        return Decision(action=action, reason_code=decision_data["reason_code"]), usage
+    except InvalidModelResponse:
+        raise
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise InvalidModelResponse("missing_response_fields", usage) from error
 
 
 def subq_request(payload: dict[str, Any], *, api_key: str,
@@ -251,13 +278,18 @@ def run_episode(case: RefundCase, arm: Arm, *, decide: Callable[[dict[str, Any]]
     for _ in range(MAX_DECISIONS_PER_CASE):
         payload = make_payload(arm, view, history, verdict)
         budget.reserve(payload)
+        model_calls += 1
         try:
             decision, usage = decide(payload)
             budget.record(usage)
+        except InvalidModelResponse as failure:
+            if failure.usage is not None:
+                budget.record(failure.usage)
+            error = str(failure)
+            break
         except PilotError as failure:
             error = str(failure)
             break
-        model_calls += 1
         input_tokens += usage.prompt_tokens
         output_tokens += usage.completion_tokens
         observation = world.step(decision.action)
@@ -328,7 +360,7 @@ def main() -> int:
             if error:
                 break
     print(json.dumps({
-        "completed_episodes": count,
+        "episodes_recorded": count,
         "expected_episodes": len(benchmark_cases()) * len(Arm),
         "model_calls_reserved": budget.calls,
         "reported_usd": round(budget.spent_usd, 6),
