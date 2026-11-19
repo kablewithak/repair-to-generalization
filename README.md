@@ -37,3 +37,14 @@ $env:PYTHONPATH = Join-Path (Get-Location) 'src'
 ```
 
 This explicitly authorizes paid inference with a **per-run** $0.10 limit; the default call limit is 72. No API key is saved. Results go to ignored `reports/runs/` JSONL files. For the deterministic control study, use `python -m repair_to_generalization.evidence_reuse` instead.
+
+## Cost-sensitive decision pilot
+
+The first Savant pilot solved all six cases under every memory condition, always inspecting live state. The follow-up therefore **prices inspection explicitly** while preserving those same six underlying cases. It evaluates cheap (1 point) and expensive (8 points) inspection against three memory conditions. Synthetic scoring awards +20 for exactly one refund, subtracts 40 for a duplicate, and charges live tool and sandbox probe costs. These costs are experimental units, not dollars.
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.cost_pilot --live --max-usd 0.10
+```
+
+The command prints a per-condition summary and writes detailed traces to ignored `reports/runs/`. The 36 episodes are paired cost scenarios, **not** 36 independent task families. It requires `SUBQ_API_KEY`, uses a per-run API spending ceiling, and makes no real refund requests.
