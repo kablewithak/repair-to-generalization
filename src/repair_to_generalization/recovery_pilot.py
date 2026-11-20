@@ -177,6 +177,7 @@ def run_trajectory(
     lesson: dict[str, Any],
     policy: SharedPolicy,
     inspection_cost: int = INSPECTION_COST,
+    on_step: Callable[[dict[str, Any]], None] | None = None,
 ) -> RecoveryTrajectory:
     world = RefundSimulator(case)
     verdict, probe_actions = probe_for(case, treatment)
@@ -197,13 +198,16 @@ def run_trajectory(
         reused += int(cache_hit)
         fresh += int(not cache_hit)
         observation = world.step(decision.action)
-        trace.append({
+        step = {
             "request_payload": payload,  # Public synthetic context, never an API key.
             "cache_hit": cache_hit,
             "action": decision.action.value,
             "reason_code": decision.reason_code,
             "observation": asdict(observation),
-        })
+        }
+        trace.append(step)
+        if on_step is not None:
+            on_step({"step_index": len(trace) - 1, **step})
         if decision.action is Action.STOP:
             break
     outcome = world.outcome()
