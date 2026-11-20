@@ -64,3 +64,26 @@ $env:PYTHONPATH = Join-Path (Get-Location) 'src'
 ```
 
 The default is three fresh stochastic repetitions per matched condition (60 pairs, 120 simulated trajectories). Identical prompts are billed once *within* a repetition. No paid requests are made without `--live`; the `--max-usd` budget is a per-run cap. Traces and acquisition evidence are written as JSONL under ignored `reports/runs/`. This is an exploratory completion-and-safety measurement, not evidence of generalization until results are analyzed.
+
+## G3.1: agent-acquired experience
+
+The acquisition pilot lets Savant choose actions on **one original V1 synthetic
+refund episode**, observe the resulting tool feedback, and write one structured
+lesson. Deterministic validation checks evidence references and witnessed task
+feedback against the actual trajectory. The lesson remains *advisory*: its
+future usefulness, and any learning effect, require the separate G3.2 held-out
+comparison. Older guided-recovery pilots remain unchanged.
+
+Set `SUBQ_API_KEY` only in your PowerShell environment, then run:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.acquisition_pilot --live --max-usd 0.10
+```
+
+This run uses at most **four agent decisions and one reflection call**, with no
+automatic retries. A paid call requires `--live`; budget reservations and
+billable invalid responses count toward the ceiling. The ignored JSONL report
+retains each observed step even if a later model response fails validation.
+Add `--initially-committed` only to select the other V1 hidden-state condition
+for a separately authorized experiment; this flag is never passed to Savant.
