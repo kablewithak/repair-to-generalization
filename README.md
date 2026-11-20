@@ -48,3 +48,19 @@ $env:PYTHONPATH = Join-Path (Get-Location) 'src'
 ```
 
 The command prints a per-condition summary and writes detailed traces to ignored `reports/runs/`. The 36 episodes are paired cost scenarios, **not** 36 independent task families. It requires `SUBQ_API_KEY`, uses a per-run API spending ceiling, and makes no real refund requests.
+
+
+## Paired full-recovery pilot
+
+The replicated first-decision study measures **action preferences**, not completed recoveries. This next experiment executes whole Savant-driven tool trajectories in matched original/changed environments. Each repetition reuses a sampled model decision whenever the complete public prompt is identical; trajectories branch only when public evidence or feedback differs. It compares hidden versus visible drift, prior commit states, and the five verifier-trust treatments at an inspection cost of 25 points.
+
+The experience record is built from **two executed, successful guided v1 recoveries**, not a hard-coded lesson or a model-written reflection. The pilot does not claim self-learning or sandbox fidelity. It reports realized task success, duplicate refunds, incomplete/stopped episodes, and live/probe costs separately; cases are synthetic and not independent task families.
+
+With `SUBQ_API_KEY` set in your PowerShell session:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.recovery_pilot --live --max-usd 0.50
+```
+
+The default is three fresh stochastic repetitions per matched condition (60 pairs, 120 simulated trajectories). Identical prompts are billed once *within* a repetition. No paid requests are made without `--live`; the `--max-usd` budget is a per-run cap. Traces and acquisition evidence are written as JSONL under ignored `reports/runs/`. This is an exploratory completion-and-safety measurement, not evidence of generalization until results are analyzed.
