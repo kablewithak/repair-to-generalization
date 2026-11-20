@@ -87,3 +87,36 @@ billable invalid responses count toward the ceiling. The ignored JSONL report
 retains each observed step even if a later model response fails validation.
 Add `--initially-committed` only to select the other V1 hidden-state condition
 for a separately authorized experiment; this flag is never passed to Savant.
+
+## G3.2: measured use of self-acquired experience
+
+After inspecting and accepting a G3.1 report, compare two arms: **no memory**
+and **the unchanged Savant-authored lesson from that report**. The harness
+replays the original acquisition and validates its evidence before use. The
+report and lesson are identified by SHA-256 hashes; neither is manually
+rewritten into a policy. Both arms receive the same task, model, action budget,
+and synthetic inspection cost (25 units). Within each repetition, identical
+complete public prompts reuse the same model response.
+
+Five held-out simulator conditions cover the other V1 prior-commit state and
+four V2 combinations of prior commit and visible/hidden drift. The exact G3.1
+training condition is excluded. These are **five conditions of one simulator**,
+not five independent tasks. Behavior changes, safe completions, duplicates,
+and cost are reported separately; a changed prompt or decision alone does not
+establish learning or statistical significance.
+
+With `SUBQ_API_KEY` set locally, and using your original G3.1 report:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.learning_pilot --experience reports\runs\savant_acquisition_20261120_210809.jsonl --live --repetitions 3 --max-usd 0.10
+```
+
+The command authorizes paid inference **only when run with `--live`**. It uses
+three fresh repetitions, a maximum of 120 model calls (usually fewer because
+identical prompts reuse responses), and a per-run $0.10 spending ceiling.
+Completed episodes and individual tool steps (including steps preceding a
+failed model call) go into ignored `reports/runs/`. Do not claim model-weight learning:
+the proposed learning mechanism is **agent-level acquisition, persistence,
+and reuse of experience**. A positive learning-effect claim requires comparing
+the held-out outcomes and safety against the no-memory baseline.
