@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from repair_to_generalization.comparison import benchmark_cases
 from repair_to_generalization.counterfactual import RefundProbeSandbox, validate_retry_lesson
-from repair_to_generalization.refund_simulator import Action, RefundCase, RefundSimulator
+from repair_to_generalization.refund_simulator import Action, RefundCase, RefundSimulator, ToolSemantics
 from repair_to_generalization.savant_pilot import (
     Arm,
     Budget,
@@ -50,8 +50,8 @@ def cost_payload(
     probe_verdict: str | None,
     inspection_cost: int,
 ) -> dict[str, Any]:
-    if inspection_cost not in INSPECTION_COSTS:
-        raise ValueError("unsupported inspection cost")
+    if type(inspection_cost) is not int or inspection_cost < 0:
+        raise ValueError("inspection cost must be a non-negative integer")
     payload = make_payload(arm, view, history, probe_verdict)
     # Savant's output limit also includes reasoning tokens; 768 may be too small
     # for a cost-sensitive decision even when the visible JSON is tiny.
@@ -123,15 +123,21 @@ def run_cost_episode(
     *,
     decide: Callable[[dict[str, Any]], tuple[Decision, Usage]],
     budget: Budget,
+    probe_semantics: ToolSemantics | None = None,
+    probe_available: bool = True,
 ) -> CostEpisode:
     world = RefundSimulator(case)
     view = world.agent_view()
     verdict: str | None = None
     probe_cost = 0
     if arm is Arm.PROBE_EVIDENCE:
-        # Only the experimental harness sees the actual tool semantics.
-        # A faithful current-version sandbox is an assumption, not a deployment guarantee.
-        evidence = validate_retry_lesson(RefundProbeSandbox(case.semantics))
+        # A sandbox may lag the live tool. Fidelity is fixed by the evaluator,
+        # never disclosed to the agent; None means assume faithful for v2.
+        sandbox = (
+            RefundProbeSandbox(probe_semantics or case.semantics)
+            if probe_available else None
+        )
+        evidence = validate_retry_lesson(sandbox)
         verdict = evidence.verdict.value
         probe_cost = evidence.probe_actions * SANDBOX_ACTION_COST
 
