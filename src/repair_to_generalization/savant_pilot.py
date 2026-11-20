@@ -147,8 +147,11 @@ def make_payload(arm: Arm, view: object, history: list[dict[str, Any]],
     elif arm is Arm.RAW_LESSON:
         memory = OLD_LESSON
     else:
-        memory = OLD_LESSON + " Current isolated counterfactual probe verdict: " + str(probe_verdict)
-        memory += ". The probes used both possible prior-commit states in a disposable sandbox."
+        memory = OLD_LESSON + " Isolated sandbox probe verdict: " + str(probe_verdict)
+        memory += (
+            ". The probes used both possible prior-commit states in a disposable "
+            "sandbox. Sandbox parity with the live tool has NOT been verified."
+        )
     view_data = asdict(view)  # Only public tool signal, never hidden case fields.
     prompt = {
         "task": "Get exactly one committed refund and then stop.",
