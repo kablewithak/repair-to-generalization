@@ -49,13 +49,16 @@ def cost_payload(
     history: list[dict[str, Any]],
     probe_verdict: str | None,
     inspection_cost: int,
+    max_output_tokens: int = 2048,
 ) -> dict[str, Any]:
     if type(inspection_cost) is not int or inspection_cost < 0:
         raise ValueError("inspection cost must be a non-negative integer")
+    if type(max_output_tokens) is not int or max_output_tokens < 1:
+        raise ValueError("max_output_tokens must be a positive integer")
     payload = make_payload(arm, view, history, probe_verdict)
     # Savant's output limit also includes reasoning tokens; 768 may be too small
     # for a cost-sensitive decision even when the visible JSON is tiny.
-    payload["max_tokens"] = 2048
+    payload["max_tokens"] = max_output_tokens
     payload["messages"][0]["content"] = (
         "You control a synthetic refund tool. Choose among inspect, retry, stop. "
         "Your objective is to maximize total points while managing the risk of "
@@ -125,6 +128,7 @@ def run_cost_episode(
     budget: Budget,
     probe_semantics: ToolSemantics | None = None,
     probe_available: bool = True,
+    max_output_tokens: int = 2048,
 ) -> CostEpisode:
     world = RefundSimulator(case)
     view = world.agent_view()
@@ -146,7 +150,7 @@ def run_cost_episode(
     before_usd = budget.spent_usd
     error: str | None = None
     for _ in range(MAX_DECISIONS_PER_CASE):
-        payload = cost_payload(arm, view, trace, verdict, inspection_cost)
+        payload = cost_payload(arm, view, trace, verdict, inspection_cost, max_output_tokens)
         budget.reserve(payload)
         calls += 1
         try:
