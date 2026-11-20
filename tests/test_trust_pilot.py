@@ -4,11 +4,12 @@ import json
 import unittest
 
 from repair_to_generalization.comparison import benchmark_cases
-from repair_to_generalization.cost_pilot import score
+from repair_to_generalization.cost_pilot import cost_payload, score
 from repair_to_generalization.refund_simulator import Action, RefundCase, RefundSimulator, ToolSemantics
-from repair_to_generalization.savant_pilot import Budget, Decision, Usage
+from repair_to_generalization.savant_pilot import Arm, Budget, Decision, Usage
 from repair_to_generalization.trust_pilot import (
-    INSPECTION_COSTS, Treatment, run_trust_episode, summarize, treatment_settings,
+    INSPECTION_COSTS, MAX_OUTPUT_TOKENS, Treatment, run_trust_episode, summarize,
+    treatment_settings,
 )
 
 
@@ -29,6 +30,15 @@ def scripted_decider(payload):
 
 
 class TrustPilotTests(unittest.TestCase):
+    def test_trust_pilot_reserves_full_reasoning_allowance(self):
+        case = RefundSimulator(RefundCase("a", ToolSemantics.IDEMPOTENT, True, False))
+        payload = cost_payload(
+            arm=Arm.NO_MEMORY,
+            view=case.agent_view(), history=[], probe_verdict=None,
+            inspection_cost=25, max_output_tokens=MAX_OUTPUT_TOKENS,
+        )
+        self.assertEqual(payload["max_tokens"], 8192)
+
     def test_scenario_matrix_is_balanced_but_not_independent(self):
         cases = benchmark_cases()
         self.assertEqual(len(cases), 6)
