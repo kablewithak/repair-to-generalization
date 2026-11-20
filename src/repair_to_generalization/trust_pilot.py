@@ -31,6 +31,7 @@ from repair_to_generalization.savant_pilot import (
 
 
 INSPECTION_COSTS = (1, 25)
+MAX_OUTPUT_TOKENS = 8192  # Includes Savant's private reasoning; no paid retries.
 
 
 class Treatment(str, Enum):
@@ -80,6 +81,7 @@ def run_trust_episode(
         budget=budget,
         probe_semantics=sandbox_semantics,
         probe_available=available,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
     )
     return TrustEpisode(
         treatment=treatment.value,
