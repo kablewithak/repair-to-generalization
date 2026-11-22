@@ -22,7 +22,7 @@ from repair_to_generalization.learning_pilot import (
 from repair_to_generalization.recovery_pilot import (
     INSPECTION_COST, SharedPolicy, action_cost, recovery_payload, run_trajectory,
 )
-from repair_to_generalization.refund_simulator import Action, RefundSimulator
+from repair_to_generalization.refund_simulator import Action, RefundCase, RefundSimulator
 from repair_to_generalization.repair_pilot import (
     FailedExperience, load_failure, repair_payload, validate_repair,
 )
@@ -35,6 +35,12 @@ from repair_to_generalization.trust_pilot import Treatment
 
 REPETITIONS = 3
 ARMS = ("no_memory", "raw_lesson", "repaired_lesson")
+NO_COMMIT_V2_CASES = tuple(
+    case for case in EVAL_CASES if case.case_id in (
+        "v2-no-commit-hidden", "v2-no-commit-visible",
+    )
+)
+CASE_SETS = {"all": EVAL_CASES, "no_commit_v2": NO_COMMIT_V2_CASES}
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,7 @@ def load_repair(
 def comparison_setup(
     original: FrozenExperience, repaired: FrozenRepair,
     repair_exposed_case_id: str, repetitions: int,
+    cases: tuple[RefundCase, ...] = EVAL_CASES,
 ) -> dict[str, Any]:
     return {
         "record_type": "repair_comparison_setup",
@@ -108,7 +115,7 @@ def comparison_setup(
         "original_lesson_sha256": original.lesson_sha256,
         "repair_report_sha256": repaired.report_sha256,
         "repaired_lesson_sha256": repaired.lesson_sha256,
-        "evaluation_cases": [case.case_id for case in EVAL_CASES],
+        "evaluation_cases": [case.case_id for case in cases],
         "repair_exposed_case_id": repair_exposed_case_id,
         "arms": list(ARMS), "repetitions": repetitions,
         "inspection_cost_units": INSPECTION_COST,
@@ -118,6 +125,7 @@ def comparison_setup(
 def load_resume(
     path: Path, original: FrozenExperience, repaired: FrozenRepair,
     repair_exposed_case_id: str, repetitions: int,
+    cases: tuple[RefundCase, ...] = EVAL_CASES,
 ) -> ResumeEvidence:
     """Accept only fully replayed repetitions; never replay a paid completed arm."""
     if not path.is_file() or not 0 < path.stat().st_size <= 3_000_000:
@@ -129,7 +137,9 @@ def load_resume(
         raise ValueError("resume_invalid_jsonl") from error
     if (
         len(rows) < 3 or not all(isinstance(row, dict) for row in rows)
-        or rows[0] != comparison_setup(original, repaired, repair_exposed_case_id, repetitions)
+        or rows[0] != comparison_setup(
+            original, repaired, repair_exposed_case_id, repetitions, cases,
+        )
         or rows[-1].get("record_type") != "run_error"
         or type(rows[-1].get("error")) is not str
     ):
@@ -137,7 +147,7 @@ def load_resume(
 
     events = rows[1:-1]
     episodes = [row for row in events if row.get("record_type") == "repair_evaluation_episode"]
-    per_rep = len(EVAL_CASES) * len(ARMS)
+    per_rep = len(cases) * len(ARMS)
     completed_repetitions, remainder = divmod(len(episodes), per_rep)
     if remainder or not 1 <= completed_repetitions < repetitions:
         raise ValueError("resume_not_on_repetition_boundary")
@@ -147,7 +157,7 @@ def load_resume(
         sampled: dict[str, tuple[str, str]] = {}
         offset = (repetition - 1) % len(ARMS)
         arm_order = ARMS[offset:] + ARMS[:offset]
-        for case in EVAL_CASES:
+        for case in cases:
             for arm in arm_order:
                 receipts: list[dict[str, Any]] = []
                 while cursor < len(events) and events[cursor].get("record_type") == "repair_evaluation_step":
@@ -233,18 +243,20 @@ def load_resume(
 
 def summarize(
     records: list[dict[str, Any]], repetitions: int, repair_exposed_case_id: str,
+    cases: tuple[RefundCase, ...] = EVAL_CASES,
 ) -> dict[str, Any]:
     """Deterministic paired comparisons, including distinct safety regressions."""
     if not 1 <= repetitions <= 10:
         raise ValueError("repetitions_out_of_range")
-    if repair_exposed_case_id not in {case.case_id for case in EVAL_CASES}:
+    case_ids = {case.case_id for case in cases}
+    if repair_exposed_case_id not in case_ids:
         raise ValueError("unknown_repair_exposure_case")
     groups: dict[tuple[int, str], dict[str, dict[str, Any]]] = {}
     for entry in records:
         repetition, case_id, arm = entry["repetition"], entry["case_id"], entry["arm"]
         if (
             type(repetition) is not int or not 1 <= repetition <= repetitions
-            or case_id not in {case.case_id for case in EVAL_CASES}
+            or case_id not in case_ids
             or arm not in ARMS
         ):
             raise ValueError("repair_comparison_unknown_episode")
@@ -253,7 +265,7 @@ def summarize(
             raise ValueError("repair_comparison_duplicate_episode")
         group[arm] = entry["result"]
     if (
-        len(groups) != repetitions * len(EVAL_CASES)
+        len(groups) != repetitions * len(cases)
         or any(set(group) != set(ARMS) for group in groups.values())
     ):
         raise ValueError("repair_comparison_incomplete_pairs")
@@ -314,7 +326,7 @@ def summarize(
                                          for (_, name), group in groups.items()
                                          if name == case.case_id),
             } for arm in ARMS},
-        } for case in EVAL_CASES],
+        } for case in cases],
         "by_arm": {arm: {
             "successes": sum(group[arm]["success"] for group in groups.values()),
             "unsafe_duplicates": sum(group[arm]["unsafe_duplicate"] for group in groups.values()),
@@ -329,6 +341,14 @@ def summarize(
             "This does not establish weight updates, independent task-family "
             "generalization, or statistical significance. Safety and task success "
             "must both be inspected before claiming benefit."
+            if cases == EVAL_CASES else
+            "Three paired arms measure memory-conditioned outcomes on two no-commit "
+            "conditions of one simulator. The hidden condition supplied repair feedback; "
+            "the visible condition did not. Case selection follows G4.2, so this is "
+            "post-hoc exploratory replication, not independent held-out validation. "
+            "This does not establish weight updates, independent task-family "
+            "generalization, or statistical significance. Cheaper failed stops "
+            "are not an efficiency improvement."
         ),
     }
 
@@ -340,19 +360,20 @@ def run_comparison(
     budget: Budget, emit: Callable[[dict[str, Any]], None],
     results: list[dict[str, Any]] | None = None,
     start_repetition: int = 1,
+    cases: tuple[RefundCase, ...] = EVAL_CASES,
 ) -> list[dict[str, Any]]:
     if not 1 <= start_repetition <= repetitions <= 10:
         raise ValueError("repetitions_out_of_range")
-    if repair_exposed_case_id not in {case.case_id for case in EVAL_CASES}:
+    if repair_exposed_case_id not in {case.case_id for case in cases}:
         raise ValueError("unknown_repair_exposure_case")
     if start_repetition == 1:
-        emit(comparison_setup(original, repaired, repair_exposed_case_id, repetitions))
+        emit(comparison_setup(original, repaired, repair_exposed_case_id, repetitions, cases))
     if results is None:
         results = []
     for repetition in range(start_repetition, repetitions + 1):
         policy = SharedPolicy(decide, budget)
         arm_order = ARMS[(repetition - 1) % len(ARMS):] + ARMS[:(repetition - 1) % len(ARMS)]
-        for case in EVAL_CASES:
+        for case in cases:
             for arm in arm_order:
                 treatment = Treatment.NO_MEMORY if arm == "no_memory" else Treatment.RAW_LESSON
                 lesson = repaired.lesson if arm == "repaired_lesson" else original.lesson
@@ -378,20 +399,25 @@ def run_comparison(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="G4.2 paired Savant repair-effect comparison")
+    parser = argparse.ArgumentParser(description="G4 paired Savant repair-effect comparison")
     parser.add_argument("--experience", type=Path, required=True, help="complete G3.1 JSONL")
     parser.add_argument("--learning", type=Path, required=True, help="complete G3.2 JSONL")
     parser.add_argument("--repair", type=Path, required=True, help="accepted G4.1 JSONL")
     parser.add_argument("--live", action="store_true", help="authorize paid Savant calls")
     parser.add_argument("--max-usd", type=float, default=0.05)
     parser.add_argument("--repetitions", type=int, default=REPETITIONS)
-    parser.add_argument("--resume-from", type=Path, help="failed G4.2 JSONL at a full repetition boundary")
+    parser.add_argument(
+        "--case-set", choices=tuple(CASE_SETS), default="all",
+        help="all G4.2 cases or two diagnostic V2 no-commit cases (G4.3)",
+    )
+    parser.add_argument("--resume-from", type=Path, help="failed comparison JSONL at a full repetition boundary")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not args.live:
         parser.error("Explicit --live required for paid inference")
     if not 0 < args.max_usd <= 0.50 or not 1 <= args.repetitions <= 10:
         parser.error("--max-usd must be within (0, 0.50]; repetitions within [1, 10]")
+    cases = CASE_SETS[args.case_set]
     key = os.getenv("SUBQ_API_KEY")
     if not key:
         parser.error("SUBQ_API_KEY is missing")
@@ -400,15 +426,15 @@ def main() -> int:
         failure = load_failure(args.learning, original)
         repaired = load_repair(args.repair, original, failure)
         resume = (load_resume(
-            args.resume_from, original, repaired, failure.case_id, args.repetitions,
+            args.resume_from, original, repaired, failure.case_id, args.repetitions, cases,
         ) if args.resume_from else None)
     except (OSError, ValueError) as error:
-        parser.error(f"G4.2 source reports failed preflight: {error}")
+        parser.error(f"G4 source reports failed preflight: {error}")
 
     start = 1 + resume.completed_repetitions if resume else 1
     budget = Budget(
         max_usd=args.max_usd,
-        max_calls=(args.repetitions - start + 1) * len(EVAL_CASES) * len(ARMS) * MAX_DECISIONS_PER_CASE,
+        max_calls=(args.repetitions - start + 1) * len(cases) * len(ARMS) * MAX_DECISIONS_PER_CASE,
     )
     destination = args.output or Path("reports/runs") / (
         ("savant_repair_effect_resumed_" if resume else "savant_repair_effect_")
@@ -423,7 +449,7 @@ def main() -> int:
             output.flush()
 
         if resume:
-            emit(comparison_setup(original, repaired, failure.case_id, args.repetitions))
+            emit(comparison_setup(original, repaired, failure.case_id, args.repetitions, cases))
             emit({
                 "record_type": "resume_source", "source_report_sha256": resume.source_sha256,
                 "completed_repetitions": resume.completed_repetitions,
@@ -437,15 +463,16 @@ def main() -> int:
                 original, repaired, failure.case_id, repetitions=args.repetitions,
                 decide=lambda payload: parse_completion(subq_request(payload, api_key=key)),
                 budget=budget, emit=emit, results=results, start_repetition=start,
+                cases=cases,
             )
         except PilotError as failure_error:
             error = str(failure_error)
             emit({"record_type": "run_error", "error": error})
-    summary = summarize(results, args.repetitions, failure.case_id) if not error else None
+    summary = summarize(results, args.repetitions, failure.case_id, cases) if not error else None
     print(json.dumps({
         "status": "comparison_completed_not_generalization_claim" if not error else "error",
         "completed_episodes": len(results),
-        "expected_episodes": args.repetitions * len(EVAL_CASES) * len(ARMS),
+        "expected_episodes": args.repetitions * len(cases) * len(ARMS),
         "model_calls_reserved": budget.calls,
         "api_usd": round(budget.spent_usd, 9),
         "new_calls_only": resume is not None,
