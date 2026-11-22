@@ -120,3 +120,34 @@ failed model call) go into ignored `reports/runs/`. Do not claim model-weight le
 the proposed learning mechanism is **agent-level acquisition, persistence,
 and reuse of experience**. A positive learning-effect claim requires comparing
 the held-out outcomes and safety against the no-memory baseline.
+
+## G4.1: agent-authored repair after a witnessed failure
+
+The complete G3.2 result contained **one unsafe duplicate in the raw-lesson
+arm** and none in the matched no-memory arm. It did not establish a positive
+learning effect. G4.1 asks Savant to **revise its own original G3.1 lesson**
+using the public action/observation sequence from that G3.2 failure and its
+terminal failure feedback.
+
+Before inference, the harness validates both source reports, checks their
+linked SHA-256 identifiers, selects the single relevant memory-specific failure,
+replays its simulator observations, and reconstructs the exact agent-visible
+requests. Hidden simulator state and evaluator-only tool semantics are excluded
+from the revision request. The revised JSON must cite both repeated retries,
+match the terminal feedback, and change its guidance. These checks establish
+**evidence-grounded repair acquisition**, not whether the new lesson works.
+
+With your original ignored reports in `reports\runs\` and `SUBQ_API_KEY` set
+only in your local PowerShell session:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.repair_pilot --experience reports\runs\savant_acquisition_20261120_210809.jsonl --learning reports\runs\savant_learning_20261120_230142.jsonl --live --max-usd 0.02
+```
+
+This authorizes **at most one paid Savant reflection call** and caps the
+per-run API budget at $0.02; there is no automatic retry. Invalid responses
+still consume their actual billable usage. The result appears in an ignored
+`reports/runs/savant_repair_*.jsonl` file. Inspect and share that report
+before designing G4.2's repaired-versus-original memory comparison. No repair
+effect, held-out generalization, or model-weight update is claimed at G4.1.
