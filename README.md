@@ -151,3 +151,36 @@ still consume their actual billable usage. The result appears in an ignored
 `reports/runs/savant_repair_*.jsonl` file. Inspect and share that report
 before designing G4.2's repaired-versus-original memory comparison. No repair
 effect, held-out generalization, or model-weight update is claimed at G4.1.
+
+## G4.2: measure reuse of the repaired experience
+
+After accepting a G4.1 report, compare **no memory**, the unchanged G3.1
+Savant-authored lesson, and the **exact G4.1 Savant-authored repair**. Before
+any inference, the harness replays and cross-checks all three JSONL artifacts,
+the failure trace, the original/repair prompt boundaries, and their linked
+SHA-256 identifiers. It never substitutes a developer-authored repair policy.
+
+The three arms run five fixed simulator conditions over three fresh model
+repetitions: **45 paired episodes** in total. Identical complete public prompts
+reuse a sampled decision *within* a repetition, and arm order rotates. The
+report separates task success, duplicate refunds, incomplete episodes,
+synthetic tool costs, and original-vs-repaired paired wins/regressions.
+
+**Important boundary:** the hidden V2 no-commit condition produced the G4.1
+repair feedback, so improvements on it show revisiting a repaired failure,
+not unseen transfer. Results for the **other four conditions** are reported
+separately; none is an independent task family. No statistical or model-weight
+learning claim is preauthorized.
+
+With `SUBQ_API_KEY` set locally and all three ignored reports present:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.repair_effect_pilot --experience reports\runs\savant_acquisition_20261120_210809.jsonl --learning reports\runs\savant_learning_20261120_230142.jsonl --repair reports\runs\savant_repair_20261122_141925.jsonl --live --repetitions 3 --max-usd 0.05
+```
+
+This authorizes a **new paid comparison** only with `--live`, capped at $0.05
+per run and up to 180 reserved decisions (usually fewer due to prompt caching).
+No automatic retries occur. The ignored `savant_repair_effect_*.jsonl` report
+retains realized traces and costs, including partial evidence on a model error.
+Upload the report for the G4.2 evidence review before any G5 task-family test.

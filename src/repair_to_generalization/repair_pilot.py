@@ -32,6 +32,7 @@ from repair_to_generalization.trust_pilot import MAX_OUTPUT_TOKENS, Treatment
 class FailedExperience:
     report_sha256: str
     repetition: int
+    case_id: str  # Evaluator-only: never included in the reflection request.
     public_task: str
     public_costs: dict[str, Any]
     initial_observation: dict[str, Any]
@@ -141,6 +142,7 @@ def load_failure(path: Path, original: FrozenExperience) -> FailedExperience:
     return FailedExperience(
         report_sha256=hashlib.sha256(raw).hexdigest(),
         repetition=failed["repetition"],
+        case_id=failed["case_id"],
         public_task=initial_prompt["task"],
         public_costs=initial_prompt["costs_and_rewards"],
         initial_observation=initial_prompt["tool_observation"],
