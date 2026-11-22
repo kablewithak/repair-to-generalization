@@ -12,7 +12,7 @@ from repair_to_generalization.learning_pilot import FrozenExperience
 from repair_to_generalization.refund_simulator import Action
 from repair_to_generalization.repair_pilot import FailedExperience, repair_payload
 from repair_to_generalization.repair_effect_pilot import (
-    ARMS, EVAL_CASES, FrozenRepair, load_repair, load_resume,
+    ARMS, EVAL_CASES, NO_COMMIT_V2_CASES, FrozenRepair, load_repair, load_resume,
     run_comparison, summarize,
 )
 from repair_to_generalization.savant_pilot import (
@@ -128,6 +128,87 @@ def demo_decider(payload):
 
 
 class RepairEffectTests(unittest.TestCase):
+    def test_g43_hard_cases_are_paired_and_reported_without_easy_cases(self):
+        repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        events = []
+        results = run_comparison(
+            ORIGINAL, repaired, FAILED.case_id, repetitions=2,
+            cases=NO_COMMIT_V2_CASES, decide=demo_decider,
+            budget=Budget(max_usd=0.2, max_calls=48), emit=events.append,
+        )
+        self.assertEqual([case.case_id for case in NO_COMMIT_V2_CASES], [
+            "v2-no-commit-hidden", "v2-no-commit-visible",
+        ])
+        self.assertEqual(events[0]["evaluation_cases"], [
+            "v2-no-commit-hidden", "v2-no-commit-visible",
+        ])
+        self.assertEqual(len(results), 2 * len(NO_COMMIT_V2_CASES) * len(ARMS))
+        self.assertEqual({row["case_id"] for row in results}, {
+            "v2-no-commit-hidden", "v2-no-commit-visible",
+        })
+        report = summarize(results, 2, FAILED.case_id, NO_COMMIT_V2_CASES)
+        self.assertEqual(report["paired_cases"], 4)
+        self.assertEqual(len(report["by_case"]), 2)
+        self.assertEqual(report["by_repair_exposure"]["exposed_case"]["paired_episodes"], 2)
+        self.assertEqual(report["by_repair_exposure"]["other_conditions"]["paired_episodes"], 2)
+        self.assertIn("post-hoc exploratory replication", report["claim_limit"])
+        for event in events:
+            if event["record_type"] != "repair_evaluation_step":
+                continue
+            prompt = json.loads(event["request_payload"]["messages"][1]["content"])
+            self.assertNotIn("committed_before_timeout", json.dumps(prompt))
+            self.assertNotIn('"case_id"', json.dumps(prompt))
+
+    def test_g43_resume_replays_only_full_hard_case_repetitions(self):
+        repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        events = []
+        run_comparison(
+            ORIGINAL, repaired, FAILED.case_id, repetitions=3,
+            cases=NO_COMMIT_V2_CASES, decide=demo_decider,
+            budget=Budget(max_usd=0.2, max_calls=72), emit=events.append,
+        )
+        per_rep = len(NO_COMMIT_V2_CASES) * len(ARMS)
+        first_rep = []
+        for event in events:
+            if event.get("repetition") == 2:
+                break
+            first_rep.append(event)
+        first_rep.append({"record_type": "run_error", "error": "api_network_failure"})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "failed.jsonl"
+            write_report(path, first_rep)
+            prior = load_resume(
+                path, ORIGINAL, repaired, FAILED.case_id, 3, NO_COMMIT_V2_CASES,
+            )
+            with self.assertRaisesRegex(ValueError, "resume_source_mismatch_or_not_failed"):
+                load_resume(path, ORIGINAL, repaired, FAILED.case_id, 3)
+        self.assertEqual(prior.completed_repetitions, 1)
+        self.assertEqual(len(prior.episodes), per_rep)
+        remaining = []
+        results = list(prior.episodes)
+        run_comparison(
+            ORIGINAL, repaired, FAILED.case_id, repetitions=3,
+            start_repetition=2, cases=NO_COMMIT_V2_CASES,
+            decide=demo_decider, budget=Budget(max_usd=0.2, max_calls=48),
+            emit=remaining.append, results=results,
+        )
+        self.assertEqual(len(results), 3 * per_rep)
+        self.assertEqual({event["repetition"] for event in remaining}, {2, 3})
+        self.assertEqual(summarize(results, 3, FAILED.case_id, NO_COMMIT_V2_CASES)["paired_cases"], 6)
+
+    def test_g43_rejects_out_of_set_and_incomplete_pairs(self):
+        repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        results = run_comparison(
+            ORIGINAL, repaired, FAILED.case_id, repetitions=1,
+            cases=NO_COMMIT_V2_CASES, decide=demo_decider,
+            budget=Budget(max_usd=0.2, max_calls=24), emit=lambda _: None,
+        )
+        with self.assertRaisesRegex(ValueError, "repair_comparison_unknown_episode"):
+            summarize(results + [{**results[-1], "case_id": "v1-prior-commit"}],
+                      1, FAILED.case_id, NO_COMMIT_V2_CASES)
+        with self.assertRaisesRegex(ValueError, "repair_comparison_incomplete_pairs"):
+            summarize(results[:-1], 1, FAILED.case_id, NO_COMMIT_V2_CASES)
+
     def test_resume_preserves_one_replayed_rep_and_runs_only_remaining_two(self):
         repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
         with tempfile.TemporaryDirectory() as folder:

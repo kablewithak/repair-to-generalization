@@ -207,3 +207,36 @@ $env:PYTHONPATH = Join-Path (Get-Location) 'src'
 The new ignored `savant_repair_effect_resumed_*.jsonl` contains all 45 episodes
 if successful. The printed model-call count and API USD refer **only to new
 paid calls**; prior calls are not billed again. No automatic retry occurs.
+
+## G4.3: focused repair-effect replication (diagnostic V2 no-commit cases)
+
+The completed G4.2 run found 12/15 successes with the original lesson and
+12/15 with its Savant-authored repair; no repair advantage was established.
+Only the two no-commit V2 cases require further comparison: hidden drift
+(`v2-no-commit-hidden`, used to produce repair feedback) and visible drift
+(`v2-no-commit-visible`, not used in that feedback). All three prior-commit
+conditions already had universal success and are excluded to save paid calls.
+
+G4.3 leaves the original and revised lessons, model requests, simulator,
+scoring, and arm pairing unchanged. Ten repetitions yield **60 episodes / 20
+matched triads**. The primary criterion is repaired-versus-original paired
+success on the *non-exposed visible* condition, with no safety regressions on
+either condition and no net overall success loss. Outcomes for no memory and
+the repair-exposed hidden condition remain visible. Treat cheaper unsuccessful
+stopping as failure, not efficiency. Case selection follows G4.2 results, so
+this is **exploratory replication**, not independent confirmation or G5 transfer.
+
+Run from the synced repository root with the three source reports still in
+ignored `reports\runs\` and `SUBQ_API_KEY` set only in the local session:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.repair_effect_pilot --experience reports\runs\savant_acquisition_20261120_210809.jsonl --learning reports\runs\savant_learning_20261120_230142.jsonl --repair reports\runs\savant_repair_20261122_141925.jsonl --case-set no_commit_v2 --repetitions 10 --max-usd 0.05 --live
+```
+
+The $0.05 cap applies to this run, and `--live` is mandatory. There are no
+automatic retries. If an interruption occurs **after one or more complete
+repetitions**, run the identical command with `--resume-from` pointing to its
+failed JSONL; retain `--case-set no_commit_v2` and `--repetitions 10` exactly.
+Only complete, trace-replayed repetitions qualify for reuse. Upload the new
+ignored `savant_repair_effect_*.jsonl` (or resumed) report for assessment.
