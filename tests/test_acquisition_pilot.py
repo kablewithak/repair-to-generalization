@@ -141,6 +141,27 @@ class AcquisitionPilotTests(unittest.TestCase):
             parse_lesson_completion(completion(candidate), trace, "safe_success")
         self.assertEqual(error.exception.usage, USAGE)
 
+    def test_text_failures_identify_field_and_limit_without_exposing_content(self):
+        trace = [{
+            "action": "stop",
+            "observation": {"action": "stop", "message": "episode_finished", "refund_count": None},
+        }]
+        for field, bad_value, diagnostic in (
+            ("summary", "x" * 401, "lesson_text:summary:too_long:401>400"),
+            ("uncertainty", " ", "lesson_text:uncertainty:empty"),
+            ("invalidation_trigger", "x" * 301,
+             "lesson_text:invalidation_trigger:too_long:301>300"),
+            ("applicability_assumptions", ["x" * 241],
+             "lesson_text:applicability_assumptions[0]:too_long:241>240"),
+        ):
+            with self.subTest(field=field):
+                candidate = candidate_from(trace, "safe_success")
+                candidate[field] = bad_value
+                with self.assertRaises(InvalidModelResponse) as error:
+                    parse_lesson_completion(completion(candidate), trace, "safe_success")
+                self.assertIn(diagnostic, str(error.exception))
+                self.assertEqual(error.exception.usage, USAGE)
+
     def test_incomplete_four_action_episode_still_gets_truthful_feedback(self):
         events = []
         budget = Budget(max_usd=0.20, max_calls=5)

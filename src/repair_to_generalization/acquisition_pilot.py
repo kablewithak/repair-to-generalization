@@ -142,18 +142,25 @@ def validate_lesson(
     if not isinstance(candidate, dict) or set(candidate) != set(LESSON_SCHEMA["required"]):
         raise ValueError("lesson_fields")
 
-    def bounded_text(value: Any, limit: int) -> str:
-        if type(value) is not str or not value.strip() or len(value) > limit:
-            raise ValueError("lesson_text")
+    def bounded_text(value: Any, limit: int, field: str) -> str:
+        if type(value) is not str:
+            raise ValueError(f"lesson_text:{field}:not_string")
+        if not value.strip():
+            raise ValueError(f"lesson_text:{field}:empty")
+        if len(value) > limit:
+            raise ValueError(f"lesson_text:{field}:too_long:{len(value)}>{limit}")
         return value.strip()
 
-    summary = bounded_text(candidate["summary"], 400)
-    uncertainty = bounded_text(candidate["uncertainty"], 400)
-    invalidation = bounded_text(candidate["invalidation_trigger"], 300)
+    summary = bounded_text(candidate["summary"], 400, "summary")
+    uncertainty = bounded_text(candidate["uncertainty"], 400, "uncertainty")
+    invalidation = bounded_text(candidate["invalidation_trigger"], 300, "invalidation_trigger")
     assumptions = candidate["applicability_assumptions"]
     if type(assumptions) is not list or not 1 <= len(assumptions) <= 4:
         raise ValueError("lesson_assumptions")
-    checked_assumptions = tuple(bounded_text(item, 240) for item in assumptions)
+    checked_assumptions = tuple(
+        bounded_text(item, 240, f"applicability_assumptions[{index}]")
+        for index, item in enumerate(assumptions)
+    )
 
     if candidate["witnessed_result"] != feedback:
         raise ValueError("lesson_outcome_mismatch")

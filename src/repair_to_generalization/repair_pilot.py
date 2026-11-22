@@ -170,7 +170,11 @@ def repair_payload(original: FrozenExperience, failure: FailedExperience) -> dic
                 "the failure, including repeated actions where relevant. Do not copy "
                 "the old lesson unchanged, invent tool semantics or hidden state, or "
                 "claim that the revision has been tested. State assumptions, uncertainty, "
-                "and what would invalidate the revised lesson. Return JSON only."
+                "and what would invalidate the revised lesson. Keep summary and "
+                "uncertainty at most 400 characters each, invalidation_trigger at "
+                "most 300 characters, and each of 1-4 applicability_assumptions "
+                "at most 240 characters. Every text field must be nonempty. "
+                "Return JSON only."
             )},
             {"role": "user", "content": json.dumps(context, sort_keys=True)},
         ],
