@@ -105,6 +105,7 @@ class RepairPilotTests(unittest.TestCase):
         self.assertEqual(context["failed_actions_and_observations"], failure.trace)
         self.assertEqual(context["terminal_training_feedback"], "unsafe_duplicate")
         self.assertFalse(payload["store"])
+        self.assertIn("summary and uncertainty at most 400 characters", payload["messages"][0]["content"])
         for forbidden in ('"case_id"', '"semantics"', "committed_before_timeout", "evaluator_outcome"):
             self.assertNotIn(forbidden, json.dumps(payload))
 
