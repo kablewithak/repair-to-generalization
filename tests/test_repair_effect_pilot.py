@@ -12,7 +12,8 @@ from repair_to_generalization.learning_pilot import FrozenExperience
 from repair_to_generalization.refund_simulator import Action
 from repair_to_generalization.repair_pilot import FailedExperience, repair_payload
 from repair_to_generalization.repair_effect_pilot import (
-    ARMS, EVAL_CASES, FrozenRepair, load_repair, run_comparison, summarize,
+    ARMS, EVAL_CASES, FrozenRepair, load_repair, load_resume,
+    run_comparison, summarize,
 )
 from repair_to_generalization.savant_pilot import (
     Budget, Decision, InvalidModelResponse, Usage,
@@ -90,6 +91,18 @@ def write_report(path, events):
     path.write_text("".join(json.dumps(row) + "\n" for row in events))
 
 
+def completed_first_rep_with_error():
+    events = []
+    run_comparison(
+        ORIGINAL, FrozenRepair(accepted_revision(), "e" * 64, "f" * 64),
+        FAILED.case_id, repetitions=1, decide=demo_decider,
+        budget=Budget(max_usd=0.2, max_calls=60), emit=events.append,
+    )
+    events[0]["repetitions"] = 3
+    events.append({"record_type": "run_error", "error": "invalid_model_response:output_limit"})
+    return events
+
+
 def demo_decider(payload):
     prompt = json.loads(payload["messages"][1]["content"])
     history = prompt["actions_and_observations_so_far"]
@@ -115,6 +128,62 @@ def demo_decider(payload):
 
 
 class RepairEffectTests(unittest.TestCase):
+    def test_resume_preserves_one_replayed_rep_and_runs_only_remaining_two(self):
+        repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "failed.jsonl"
+            write_report(path, completed_first_rep_with_error())
+            prior = load_resume(path, ORIGINAL, repaired, FAILED.case_id, 3)
+        self.assertEqual(prior.completed_repetitions, 1)
+        self.assertEqual(len(prior.episodes), 15)
+        self.assertEqual(prior.previous_error, "invalid_model_response:output_limit")
+        events = []
+        results = list(prior.episodes)
+        run_comparison(
+            ORIGINAL, repaired, FAILED.case_id, repetitions=3,
+            start_repetition=prior.completed_repetitions + 1,
+            decide=demo_decider, budget=Budget(max_usd=0.2, max_calls=120),
+            emit=events.append, results=results,
+        )
+        self.assertEqual(len(results), 45)
+        self.assertEqual(len([row for row in events if row["record_type"] == "repair_evaluation_episode"]), 30)
+        self.assertEqual(events[0]["repetition"], 2)
+        self.assertEqual({row["repetition"] for row in events}, {2, 3})
+        self.assertEqual(summarize(results, 3, FAILED.case_id)["paired_cases"], 15)
+
+    def test_resume_rejects_tamper_or_partial_repetition(self):
+        repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "failed.jsonl"
+
+            def inject_hidden(rows):
+                step = next(row for row in rows if row["record_type"] == "repair_evaluation_step")
+                prompt = json.loads(step["request_payload"]["messages"][1]["content"])
+                prompt["committed_before_timeout"] = False
+                replacement = json.dumps(prompt)
+                step["request_payload"]["messages"][1]["content"] = replacement
+                episode = next(row for row in rows if row["record_type"] == "repair_evaluation_episode")
+                episode["result"]["trace"][0]["request_payload"]["messages"][1]["content"] = replacement
+
+            def remove_episode(rows):
+                rows.pop(next(i for i, row in enumerate(rows)
+                              if row["record_type"] == "repair_evaluation_episode"))
+
+            tamperers = (
+                lambda rows: rows[0].update(repaired_lesson_sha256="z" * 64),
+                lambda rows: rows[1].update(step_index=9),
+                inject_hidden,
+                remove_episode,
+                lambda rows: rows.pop(),
+            )
+            for tamper in tamperers:
+                with self.subTest(tamper=tamper):
+                    rows = copy.deepcopy(completed_first_rep_with_error())
+                    tamper(rows)
+                    write_report(path, rows)
+                    with self.assertRaises(ValueError):
+                        load_resume(path, ORIGINAL, repaired, FAILED.case_id, 3)
+
     def test_qualifies_hash_bound_repair_report(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "repair.jsonl"

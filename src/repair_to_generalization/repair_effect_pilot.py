@@ -20,8 +20,9 @@ from repair_to_generalization.learning_pilot import (
     EVAL_CASES, FrozenExperience, load_experience,
 )
 from repair_to_generalization.recovery_pilot import (
-    INSPECTION_COST, SharedPolicy, run_trajectory,
+    INSPECTION_COST, SharedPolicy, action_cost, recovery_payload, run_trajectory,
 )
+from repair_to_generalization.refund_simulator import Action, RefundSimulator
 from repair_to_generalization.repair_pilot import (
     FailedExperience, load_failure, repair_payload, validate_repair,
 )
@@ -41,6 +42,15 @@ class FrozenRepair:
     lesson: dict[str, Any]
     report_sha256: str
     lesson_sha256: str
+
+
+@dataclass(frozen=True)
+class ResumeEvidence:
+    source_sha256: str
+    completed_repetitions: int
+    previous_error: str
+    events: list[dict[str, Any]]
+    episodes: list[dict[str, Any]]
 
 
 def load_repair(
@@ -85,6 +95,139 @@ def load_repair(
         lesson=lesson,
         report_sha256=hashlib.sha256(raw).hexdigest(),
         lesson_sha256=hashlib.sha256(canonical).hexdigest(),
+    )
+
+
+def comparison_setup(
+    original: FrozenExperience, repaired: FrozenRepair,
+    repair_exposed_case_id: str, repetitions: int,
+) -> dict[str, Any]:
+    return {
+        "record_type": "repair_comparison_setup",
+        "original_acquisition_sha256": original.report_sha256,
+        "original_lesson_sha256": original.lesson_sha256,
+        "repair_report_sha256": repaired.report_sha256,
+        "repaired_lesson_sha256": repaired.lesson_sha256,
+        "evaluation_cases": [case.case_id for case in EVAL_CASES],
+        "repair_exposed_case_id": repair_exposed_case_id,
+        "arms": list(ARMS), "repetitions": repetitions,
+        "inspection_cost_units": INSPECTION_COST,
+    }
+
+
+def load_resume(
+    path: Path, original: FrozenExperience, repaired: FrozenRepair,
+    repair_exposed_case_id: str, repetitions: int,
+) -> ResumeEvidence:
+    """Accept only fully replayed repetitions; never replay a paid completed arm."""
+    if not path.is_file() or not 0 < path.stat().st_size <= 3_000_000:
+        raise ValueError("resume_missing_or_oversized")
+    raw = path.read_bytes()
+    try:
+        rows = [json.loads(line) for line in raw.decode("utf-8-sig").splitlines()]
+    except (ValueError, UnicodeError) as error:
+        raise ValueError("resume_invalid_jsonl") from error
+    if (
+        len(rows) < 3 or not all(isinstance(row, dict) for row in rows)
+        or rows[0] != comparison_setup(original, repaired, repair_exposed_case_id, repetitions)
+        or rows[-1].get("record_type") != "run_error"
+        or type(rows[-1].get("error")) is not str
+    ):
+        raise ValueError("resume_source_mismatch_or_not_failed")
+
+    events = rows[1:-1]
+    episodes = [row for row in events if row.get("record_type") == "repair_evaluation_episode"]
+    per_rep = len(EVAL_CASES) * len(ARMS)
+    completed_repetitions, remainder = divmod(len(episodes), per_rep)
+    if remainder or not 1 <= completed_repetitions < repetitions:
+        raise ValueError("resume_not_on_repetition_boundary")
+
+    cursor = 0
+    for repetition in range(1, completed_repetitions + 1):
+        sampled: dict[str, tuple[str, str]] = {}
+        offset = (repetition - 1) % len(ARMS)
+        arm_order = ARMS[offset:] + ARMS[:offset]
+        for case in EVAL_CASES:
+            for arm in arm_order:
+                receipts: list[dict[str, Any]] = []
+                while cursor < len(events) and events[cursor].get("record_type") == "repair_evaluation_step":
+                    receipts.append(events[cursor])
+                    cursor += 1
+                if cursor >= len(events):
+                    raise ValueError("resume_missing_episode_after_steps")
+                entry = events[cursor]
+                cursor += 1
+                if (
+                    entry.get("record_type") != "repair_evaluation_episode"
+                    or any(entry.get(field) != expected for field, expected in (
+                        ("repetition", repetition), ("case_id", case.case_id), ("arm", arm),
+                    ))
+                    or not isinstance(entry.get("result"), dict)
+                ):
+                    raise ValueError("resume_episode_order_or_shape")
+                result = entry["result"]
+                trace = result.get("trace")
+                if not isinstance(trace, list) or len(trace) != len(receipts) or not 1 <= len(trace) <= MAX_DECISIONS_PER_CASE:
+                    raise ValueError("resume_trace_length")
+
+                treatment = Treatment.NO_MEMORY if arm == "no_memory" else Treatment.RAW_LESSON
+                lesson = repaired.lesson if arm == "repaired_lesson" else original.lesson
+                world = RefundSimulator(case)
+                public_history: list[dict[str, Any]] = []
+                fresh = reused = 0
+                try:
+                    for index, (step, receipt) in enumerate(zip(trace, receipts)):
+                        if (
+                            any(receipt[field] != expected for field, expected in (
+                                ("repetition", repetition), ("case_id", case.case_id),
+                                ("arm", arm), ("step_index", index),
+                            ))
+                            or any(step[field] != receipt[field] for field in (
+                                "request_payload", "cache_hit", "action", "reason_code", "observation",
+                            ))
+                        ):
+                            raise ValueError("resume_step_receipt_mismatch")
+                        expected_request = recovery_payload(
+                            treatment, world.agent_view(), public_history, lesson, None,
+                        )
+                        request = step["request_payload"]
+                        if request != expected_request:
+                            raise ValueError("resume_model_boundary_mismatch")
+                        prompt_key = json.dumps(request, sort_keys=True, separators=(",", ":"))
+                        answer = (step["action"], step["reason_code"])
+                        cached = prompt_key in sampled
+                        if step["cache_hit"] is not cached or (cached and sampled[prompt_key] != answer):
+                            raise ValueError("resume_decision_cache_mismatch")
+                        if not cached:
+                            sampled[prompt_key] = answer
+                        fresh += not cached
+                        reused += cached
+                        if asdict(world.step(Action(step["action"]))) != step["observation"]:
+                            raise ValueError("resume_observation_mismatch")
+                        public_history.append({field: step[field] for field in (
+                            "action", "reason_code", "observation",
+                        )})
+                    outcome = world.outcome()
+                    if any(result.get(key) != expected for key, expected in (
+                        ("case_id", case.case_id), ("treatment", arm), ("probe_verdict", None),
+                        ("completed", outcome.completed), ("success", outcome.success),
+                        ("unsafe_duplicate", outcome.unsafe_duplicate),
+                        ("refunds_committed", outcome.refunds_committed),
+                        ("live_cost_units", action_cost(trace, INSPECTION_COST)),
+                        ("probe_cost_units", 0), ("model_decisions", len(trace)),
+                        ("paid_model_calls", fresh), ("reused_decisions", reused),
+                        ("terminal_reason", "stopped" if outcome.completed else "action_limit"),
+                    )):
+                        raise ValueError("resume_outcome_mismatch")
+                except (KeyError, IndexError, TypeError, ValueError, RuntimeError) as error:
+                    raise ValueError("resume_unreproducible_episode") from error
+    if cursor != len(events):
+        raise ValueError("resume_unexpected_trailing_events")
+    return ResumeEvidence(
+        source_sha256=hashlib.sha256(raw).hexdigest(),
+        completed_repetitions=completed_repetitions,
+        previous_error=rows[-1]["error"],
+        events=events, episodes=episodes,
     )
 
 
@@ -196,25 +339,17 @@ def run_comparison(
     decide: Callable[[dict[str, Any]], tuple[Decision, Usage]],
     budget: Budget, emit: Callable[[dict[str, Any]], None],
     results: list[dict[str, Any]] | None = None,
+    start_repetition: int = 1,
 ) -> list[dict[str, Any]]:
-    if not 1 <= repetitions <= 10:
+    if not 1 <= start_repetition <= repetitions <= 10:
         raise ValueError("repetitions_out_of_range")
     if repair_exposed_case_id not in {case.case_id for case in EVAL_CASES}:
         raise ValueError("unknown_repair_exposure_case")
-    emit({
-        "record_type": "repair_comparison_setup",
-        "original_acquisition_sha256": original.report_sha256,
-        "original_lesson_sha256": original.lesson_sha256,
-        "repair_report_sha256": repaired.report_sha256,
-        "repaired_lesson_sha256": repaired.lesson_sha256,
-        "evaluation_cases": [case.case_id for case in EVAL_CASES],
-        "repair_exposed_case_id": repair_exposed_case_id,
-        "arms": list(ARMS), "repetitions": repetitions,
-        "inspection_cost_units": INSPECTION_COST,
-    })
+    if start_repetition == 1:
+        emit(comparison_setup(original, repaired, repair_exposed_case_id, repetitions))
     if results is None:
         results = []
-    for repetition in range(1, repetitions + 1):
+    for repetition in range(start_repetition, repetitions + 1):
         policy = SharedPolicy(decide, budget)
         arm_order = ARMS[(repetition - 1) % len(ARMS):] + ARMS[:(repetition - 1) % len(ARMS)]
         for case in EVAL_CASES:
@@ -250,6 +385,7 @@ def main() -> int:
     parser.add_argument("--live", action="store_true", help="authorize paid Savant calls")
     parser.add_argument("--max-usd", type=float, default=0.05)
     parser.add_argument("--repetitions", type=int, default=REPETITIONS)
+    parser.add_argument("--resume-from", type=Path, help="failed G4.2 JSONL at a full repetition boundary")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not args.live:
@@ -263,29 +399,44 @@ def main() -> int:
         original = load_experience(args.experience)
         failure = load_failure(args.learning, original)
         repaired = load_repair(args.repair, original, failure)
+        resume = (load_resume(
+            args.resume_from, original, repaired, failure.case_id, args.repetitions,
+        ) if args.resume_from else None)
     except (OSError, ValueError) as error:
         parser.error(f"G4.2 source reports failed preflight: {error}")
 
+    start = 1 + resume.completed_repetitions if resume else 1
     budget = Budget(
         max_usd=args.max_usd,
-        max_calls=args.repetitions * len(EVAL_CASES) * len(ARMS) * MAX_DECISIONS_PER_CASE,
+        max_calls=(args.repetitions - start + 1) * len(EVAL_CASES) * len(ARMS) * MAX_DECISIONS_PER_CASE,
     )
     destination = args.output or Path("reports/runs") / (
-        "savant_repair_effect_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".jsonl"
+        ("savant_repair_effect_resumed_" if resume else "savant_repair_effect_")
+        + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".jsonl"
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     error: str | None = None
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = list(resume.episodes) if resume else []
     with destination.open("x", encoding="utf-8") as output:
         def emit(event: dict[str, Any]) -> None:
             output.write(json.dumps(event, sort_keys=True) + "\n")
             output.flush()
 
+        if resume:
+            emit(comparison_setup(original, repaired, failure.case_id, args.repetitions))
+            emit({
+                "record_type": "resume_source", "source_report_sha256": resume.source_sha256,
+                "completed_repetitions": resume.completed_repetitions,
+                "previous_error": resume.previous_error,
+                "prior_episode_count": len(resume.episodes),
+            })
+            for prior_event in resume.events:
+                emit(prior_event)
         try:
             run_comparison(
                 original, repaired, failure.case_id, repetitions=args.repetitions,
                 decide=lambda payload: parse_completion(subq_request(payload, api_key=key)),
-                budget=budget, emit=emit, results=results,
+                budget=budget, emit=emit, results=results, start_repetition=start,
             )
         except PilotError as failure_error:
             error = str(failure_error)
@@ -297,6 +448,7 @@ def main() -> int:
         "expected_episodes": args.repetitions * len(EVAL_CASES) * len(ARMS),
         "model_calls_reserved": budget.calls,
         "api_usd": round(budget.spent_usd, 9),
+        "new_calls_only": resume is not None,
         "report": str(destination), "error": error, "summary": summary,
     }, indent=2))
     return 1 if error else 0

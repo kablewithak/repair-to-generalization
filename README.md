@@ -184,3 +184,26 @@ per run and up to 180 reserved decisions (usually fewer due to prompt caching).
 No automatic retries occur. The ignored `savant_repair_effect_*.jsonl` report
 retains realized traces and costs, including partial evidence on a model error.
 Upload the report for the G4.2 evidence review before any G5 task-family test.
+
+### Resume G4.2 after a full repetition
+
+If a billed model response ends a run **after a complete repetition**, use
+`--resume-from` to preserve those episodes. The harness verifies the earlier
+source hashes, exact public requests, observations, outcomes, prompt-cache
+receipts, and experiment order before admitting them. It retains the prior
+report hash and runs only the missing repetitions, keeping the original
+three-repetition comparison and arm rotation intact. A partial repetition is
+not silently accepted as completed evidence.
+
+The observed `savant_repair_effect_20261122_152003.jsonl` report contains one
+fully qualified repetition (15 episodes) before an `output_limit` failure.
+To complete repetitions 2 and 3 without repaying for repetition 1:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.repair_effect_pilot --experience reports\runs\savant_acquisition_20261120_210809.jsonl --learning reports\runs\savant_learning_20261120_230142.jsonl --repair reports\runs\savant_repair_20261122_141925.jsonl --resume-from reports\runs\savant_repair_effect_20261122_152003.jsonl --live --repetitions 3 --max-usd 0.05
+```
+
+The new ignored `savant_repair_effect_resumed_*.jsonl` contains all 45 episodes
+if successful. The printed model-call count and API USD refer **only to new
+paid calls**; prior calls are not billed again. No automatic retry occurs.
