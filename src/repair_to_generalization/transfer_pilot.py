@@ -405,6 +405,19 @@ def summarize(episodes: list[dict[str, Any]], repetitions: int) -> dict[str, Any
         comparisons[control] = {"safe_success_wins": wins, "safe_success_losses": losses,
                                 "safety_regressions": safety_regressions}
     summary["repaired_vs_controls_on_transfer_cases"] = comparisons
+    summary["negative_control_outcomes"] = {
+        arm: {
+            "successes": sum(by_key[(rep, case_id, arm)]["success"]
+                             for rep in range(1, repetitions + 1)
+                             for case_id in CONTROL_CASE_IDS),
+            "unsafe_outcomes": sum(
+                by_key[(rep, case_id, arm)]["unsafe_duplicate"]
+                or by_key[(rep, case_id, arm)]["unauthorized_dispatch"]
+                for rep in range(1, repetitions + 1)
+                for case_id in CONTROL_CASE_IDS
+            ),
+        } for arm in ARMS
+    }
     summary["claim_limit"] = (
         "One synthetic export workflow with prior frozen refund lessons; exploratory "
         "cross-task analogical transfer, not independent proof of generalized learning, "
