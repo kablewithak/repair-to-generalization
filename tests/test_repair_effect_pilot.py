@@ -128,6 +128,94 @@ def demo_decider(payload):
 
 
 class RepairEffectTests(unittest.TestCase):
+    def test_g44_price_control_changes_only_declared_cost_and_preserves_outcomes(self):
+        original = ORIGINAL
+        revised = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        high_events, low_events = [], []
+        high = run_comparison(
+            original, revised, FAILED.case_id, repetitions=1,
+            cases=NO_COMMIT_V2_CASES, inspection_cost=25,
+            decide=demo_decider, budget=Budget(max_usd=0.2, max_calls=24),
+            emit=high_events.append,
+        )
+        low = run_comparison(
+            original, revised, FAILED.case_id, repetitions=1,
+            cases=NO_COMMIT_V2_CASES, inspection_cost=5,
+            decide=demo_decider, budget=Budget(max_usd=0.2, max_calls=24),
+            emit=low_events.append,
+        )
+        self.assertEqual(high_events[0]["inspection_cost_units"], 25)
+        self.assertEqual(low_events[0]["inspection_cost_units"], 5)
+        self.assertEqual(len(high), len(low))
+        for expensive, inexpensive in zip(high, low):
+            self.assertEqual(
+                (expensive["repetition"], expensive["case_id"], expensive["arm"]),
+                (inexpensive["repetition"], inexpensive["case_id"], inexpensive["arm"]),
+            )
+            self.assertEqual(expensive["result"]["success"], inexpensive["result"]["success"])
+            self.assertEqual(expensive["result"]["unsafe_duplicate"], inexpensive["result"]["unsafe_duplicate"])
+            a = expensive["result"]["trace"]
+            b = inexpensive["result"]["trace"]
+            self.assertEqual([step["action"] for step in a], [step["action"] for step in b])
+            self.assertEqual(
+                expensive["result"]["live_cost_units"] - inexpensive["result"]["live_cost_units"],
+                20 * sum(step["action"] == "inspect" for step in a),
+            )
+            for left, right in zip(a, b):
+                old_request, new_request = left["request_payload"], right["request_payload"]
+                self.assertEqual(old_request["response_format"], new_request["response_format"])
+                self.assertEqual(old_request["model"], new_request["model"])
+                self.assertEqual(
+                    old_request["messages"][0]["content"].replace("25 points", "<price>"),
+                    new_request["messages"][0]["content"].replace("5 points", "<price>"),
+                )
+                old_prompt = json.loads(old_request["messages"][1]["content"])
+                new_prompt = json.loads(new_request["messages"][1]["content"])
+                self.assertEqual(old_prompt["costs_and_rewards"]["inspect_cost"], 25)
+                self.assertEqual(new_prompt["costs_and_rewards"]["inspect_cost"], 5)
+                old_prompt["costs_and_rewards"]["inspect_cost"] = 5
+                self.assertEqual(old_prompt, new_prompt)
+        self.assertEqual(
+            summarize(low, 1, FAILED.case_id, NO_COMMIT_V2_CASES, 5)["inspection_cost_units"], 5,
+        )
+        self.assertIn(
+            "post-hoc diagnostic",
+            summarize(low, 1, FAILED.case_id, NO_COMMIT_V2_CASES, 5)["claim_limit"],
+        )
+
+    def test_g44_resume_requires_exact_price_and_replays_repetition(self):
+        revised = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
+        events = []
+        run_comparison(
+            ORIGINAL, revised, FAILED.case_id, repetitions=2,
+            cases=NO_COMMIT_V2_CASES, inspection_cost=5,
+            decide=demo_decider, budget=Budget(max_usd=0.2, max_calls=48),
+            emit=events.append,
+        )
+        first = []
+        for event in events:
+            if event.get("repetition") == 2:
+                break
+            first.append(event)
+        first.append({"record_type": "run_error", "error": "output_limit"})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "low_cost_failed.jsonl"
+            write_report(path, first)
+            accepted = load_resume(
+                path, ORIGINAL, revised, FAILED.case_id, 2, NO_COMMIT_V2_CASES, 5,
+            )
+            self.assertEqual(accepted.completed_repetitions, 1)
+            self.assertEqual(len(accepted.episodes), 6)
+            with self.assertRaisesRegex(ValueError, "resume_source_mismatch_or_not_failed"):
+                load_resume(path, ORIGINAL, revised, FAILED.case_id, 2, NO_COMMIT_V2_CASES, 25)
+        with self.assertRaisesRegex(ValueError, "unsupported_inspection_cost"):
+            run_comparison(
+                ORIGINAL, revised, FAILED.case_id, repetitions=1,
+                cases=NO_COMMIT_V2_CASES, inspection_cost=6,
+                decide=demo_decider, budget=Budget(max_usd=0.2, max_calls=24),
+                emit=lambda _: None,
+            )
+
     def test_g43_hard_cases_are_paired_and_reported_without_easy_cases(self):
         repaired = FrozenRepair(accepted_revision(), "e" * 64, "f" * 64)
         events = []

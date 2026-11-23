@@ -108,7 +108,10 @@ def comparison_setup(
     original: FrozenExperience, repaired: FrozenRepair,
     repair_exposed_case_id: str, repetitions: int,
     cases: tuple[RefundCase, ...] = EVAL_CASES,
+    inspection_cost: int = INSPECTION_COST,
 ) -> dict[str, Any]:
+    if type(inspection_cost) is not int or inspection_cost not in (5, INSPECTION_COST):
+        raise ValueError("unsupported_inspection_cost")
     return {
         "record_type": "repair_comparison_setup",
         "original_acquisition_sha256": original.report_sha256,
@@ -118,7 +121,7 @@ def comparison_setup(
         "evaluation_cases": [case.case_id for case in cases],
         "repair_exposed_case_id": repair_exposed_case_id,
         "arms": list(ARMS), "repetitions": repetitions,
-        "inspection_cost_units": INSPECTION_COST,
+        "inspection_cost_units": inspection_cost,
     }
 
 
@@ -126,6 +129,7 @@ def load_resume(
     path: Path, original: FrozenExperience, repaired: FrozenRepair,
     repair_exposed_case_id: str, repetitions: int,
     cases: tuple[RefundCase, ...] = EVAL_CASES,
+    inspection_cost: int = INSPECTION_COST,
 ) -> ResumeEvidence:
     """Accept only fully replayed repetitions; never replay a paid completed arm."""
     if not path.is_file() or not 0 < path.stat().st_size <= 3_000_000:
@@ -139,6 +143,7 @@ def load_resume(
         len(rows) < 3 or not all(isinstance(row, dict) for row in rows)
         or rows[0] != comparison_setup(
             original, repaired, repair_exposed_case_id, repetitions, cases,
+            inspection_cost,
         )
         or rows[-1].get("record_type") != "run_error"
         or type(rows[-1].get("error")) is not str
@@ -199,6 +204,7 @@ def load_resume(
                             raise ValueError("resume_step_receipt_mismatch")
                         expected_request = recovery_payload(
                             treatment, world.agent_view(), public_history, lesson, None,
+                            inspection_cost,
                         )
                         request = step["request_payload"]
                         if request != expected_request:
@@ -223,7 +229,7 @@ def load_resume(
                         ("completed", outcome.completed), ("success", outcome.success),
                         ("unsafe_duplicate", outcome.unsafe_duplicate),
                         ("refunds_committed", outcome.refunds_committed),
-                        ("live_cost_units", action_cost(trace, INSPECTION_COST)),
+                        ("live_cost_units", action_cost(trace, inspection_cost)),
                         ("probe_cost_units", 0), ("model_decisions", len(trace)),
                         ("paid_model_calls", fresh), ("reused_decisions", reused),
                         ("terminal_reason", "stopped" if outcome.completed else "action_limit"),
@@ -244,8 +250,11 @@ def load_resume(
 def summarize(
     records: list[dict[str, Any]], repetitions: int, repair_exposed_case_id: str,
     cases: tuple[RefundCase, ...] = EVAL_CASES,
+    inspection_cost: int = INSPECTION_COST,
 ) -> dict[str, Any]:
     """Deterministic paired comparisons, including distinct safety regressions."""
+    if type(inspection_cost) is not int or inspection_cost not in (5, INSPECTION_COST):
+        raise ValueError("unsupported_inspection_cost")
     if not 1 <= repetitions <= 10:
         raise ValueError("repetitions_out_of_range")
     case_ids = {case.case_id for case in cases}
@@ -300,6 +309,7 @@ def summarize(
                     if name != repair_exposed_case_id]
     return {
         "paired_cases": len(groups),
+        "inspection_cost_units": inspection_cost,
         "repaired_vs_original": paired_stats("raw_lesson", "repaired_lesson", all_groups),
         "repaired_vs_no_memory": paired_stats("no_memory", "repaired_lesson", all_groups),
         "by_repair_exposure": {
@@ -342,6 +352,13 @@ def summarize(
             "generalization, or statistical significance. Safety and task success "
             "must both be inspected before claiming benefit."
             if cases == EVAL_CASES else
+            "G4.4 adjusts only the announced synthetic inspection price from 25 to 5. "
+            "Lesson text, simulator and primary outcome metrics are unchanged. "
+            "This post-hoc diagnostic controls an incentive confound, not independent "
+            "held-out generalization or evidence of model-weight learning. "
+            "Compare paired task success and safety before tool cost; cheaper stopping "
+            "without completion is not an improvement."
+            if inspection_cost == 5 else
             "Three paired arms measure memory-conditioned outcomes on two no-commit "
             "conditions of one simulator. The hidden condition supplied repair feedback; "
             "the visible condition did not. Case selection follows G4.2, so this is "
@@ -361,13 +378,19 @@ def run_comparison(
     results: list[dict[str, Any]] | None = None,
     start_repetition: int = 1,
     cases: tuple[RefundCase, ...] = EVAL_CASES,
+    inspection_cost: int = INSPECTION_COST,
 ) -> list[dict[str, Any]]:
+    if type(inspection_cost) is not int or inspection_cost not in (5, INSPECTION_COST):
+        raise ValueError("unsupported_inspection_cost")
     if not 1 <= start_repetition <= repetitions <= 10:
         raise ValueError("repetitions_out_of_range")
     if repair_exposed_case_id not in {case.case_id for case in cases}:
         raise ValueError("unknown_repair_exposure_case")
     if start_repetition == 1:
-        emit(comparison_setup(original, repaired, repair_exposed_case_id, repetitions, cases))
+        emit(comparison_setup(
+            original, repaired, repair_exposed_case_id, repetitions, cases,
+            inspection_cost,
+        ))
     if results is None:
         results = []
     for repetition in range(start_repetition, repetitions + 1):
@@ -385,7 +408,8 @@ def run_comparison(
                     })
 
                 trajectory = run_trajectory(
-                    case, treatment, lesson, policy, on_step=record_step,
+                    case, treatment, lesson, policy,
+                    inspection_cost=inspection_cost, on_step=record_step,
                 )
                 result = asdict(trajectory)
                 result["treatment"] = arm
@@ -407,6 +431,11 @@ def main() -> int:
     parser.add_argument("--max-usd", type=float, default=0.05)
     parser.add_argument("--repetitions", type=int, default=REPETITIONS)
     parser.add_argument(
+        "--inspection-cost", type=int, choices=(5, INSPECTION_COST),
+        default=INSPECTION_COST,
+        help="25 reproduces the original comparison; 5 runs the new G4.4 price control",
+    )
+    parser.add_argument(
         "--case-set", choices=tuple(CASE_SETS), default="all",
         help="all G4.2 cases or two diagnostic V2 no-commit cases (G4.3)",
     )
@@ -426,7 +455,8 @@ def main() -> int:
         failure = load_failure(args.learning, original)
         repaired = load_repair(args.repair, original, failure)
         resume = (load_resume(
-            args.resume_from, original, repaired, failure.case_id, args.repetitions, cases,
+            args.resume_from, original, repaired, failure.case_id,
+            args.repetitions, cases, args.inspection_cost,
         ) if args.resume_from else None)
     except (OSError, ValueError) as error:
         parser.error(f"G4 source reports failed preflight: {error}")
@@ -436,8 +466,9 @@ def main() -> int:
         max_usd=args.max_usd,
         max_calls=(args.repetitions - start + 1) * len(cases) * len(ARMS) * MAX_DECISIONS_PER_CASE,
     )
+    prefix = ("savant_g44_cost5_" if args.inspection_cost == 5 else "savant_repair_effect_")
     destination = args.output or Path("reports/runs") / (
-        ("savant_repair_effect_resumed_" if resume else "savant_repair_effect_")
+        prefix + ("resumed_" if resume else "")
         + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".jsonl"
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -449,7 +480,10 @@ def main() -> int:
             output.flush()
 
         if resume:
-            emit(comparison_setup(original, repaired, failure.case_id, args.repetitions, cases))
+            emit(comparison_setup(
+                original, repaired, failure.case_id, args.repetitions,
+                cases, args.inspection_cost,
+            ))
             emit({
                 "record_type": "resume_source", "source_report_sha256": resume.source_sha256,
                 "completed_repetitions": resume.completed_repetitions,
@@ -463,16 +497,19 @@ def main() -> int:
                 original, repaired, failure.case_id, repetitions=args.repetitions,
                 decide=lambda payload: parse_completion(subq_request(payload, api_key=key)),
                 budget=budget, emit=emit, results=results, start_repetition=start,
-                cases=cases,
+                cases=cases, inspection_cost=args.inspection_cost,
             )
         except PilotError as failure_error:
             error = str(failure_error)
             emit({"record_type": "run_error", "error": error})
-    summary = summarize(results, args.repetitions, failure.case_id, cases) if not error else None
+    summary = summarize(
+        results, args.repetitions, failure.case_id, cases, args.inspection_cost,
+    ) if not error else None
     print(json.dumps({
         "status": "comparison_completed_not_generalization_claim" if not error else "error",
         "completed_episodes": len(results),
         "expected_episodes": args.repetitions * len(cases) * len(ARMS),
+        "inspection_cost_units": args.inspection_cost,
         "model_calls_reserved": budget.calls,
         "api_usd": round(budget.spent_usd, 9),
         "new_calls_only": resume is not None,
