@@ -15,7 +15,7 @@ The contribution must concern **learning and transfer**. Verifier design, memory
 | G1 — Environment | Versioned, inspectable tool semantics with hidden state, realized actions, deterministic outcomes | Done for synthetic refund v1 |
 | G2 — Failure baseline | Paired trajectories expose safety, completion, and evidence-cost tradeoffs | Exploratory baseline recorded |
 | **G3 — Experience acquisition** | **Savant produces lessons from its own observed trajectories; evidence-grounded lessons are evaluated against fixed baselines** | **Mechanism demonstrated; comparative benefit mixed (one unsafe regression)** |
-| **G4 — Experience repair** | **After contradicted assumptions, agent revises/invalidates lessons and improves on paired changed-world cases** | **Repair validated; exposed-case benefit observed; non-exposed transfer not demonstrated** |
+| **G4 — Experience repair** | **After contradicted assumptions, agent revises/invalidates lessons and improves on paired changed-world cases** | **Repair acquisition demonstrated; incentive-confounded effect, non-exposed transfer not established** |
 | G5 — Held-out transfer | Repaired knowledge is evaluated on unseen environment changes/tasks, with independent repetitions and negative controls | Not started |
 
 Parameter-level RL using a trainable open-weight model is **optional after the learning loop is proven useful**. The current SubQ Savant API does not establish access to model weights or fine-tuning.
@@ -41,29 +41,32 @@ Detailed synthetic traces from the 20 November paired run are stored outside Git
 - **G4.1:** After the witnessed unsafe failure, Savant generated a valid revised lesson, tied to the original provenance and failed public trajectory. Repair acquisition was demonstrated, reuse still unmeasured.
 - **G4.2:** 15 matched tri-arm comparisons (45 episodes, including a resumed first repetition): no memory 9/15 successes, original lesson 12/15, repaired lesson 12/15. No unsafe duplicates occurred in this comparison. Repaired versus original had **two paired success wins and two losses**; no net repair advantage. Its lower mean live tool cost was partly due to unsuccessful stopping, not clean efficiency.
 - **G4.3:** 10 repetitions / 60 episodes on two no-commit V2 cases: repaired lesson 11/20 successes, original 8/20, no-memory 2/20; no duplicates. On the **repair-exposed hidden** condition repaired 7/10 vs original 4/10, but on the **non-exposed visible** condition both were 4/10. The predeclared non-exposed criterion was **not met**. In the six visible repaired failures, three stopped immediately, and three inspected a committed refund count of 0 then stopped. Tool costs were higher under repair.
+- **G4.4:** With the exact same Savant-authored lessons and simulator but inspection cost **5 instead of 25**, the five-repetition, 30-episode evaluation achieved 10/10 successes for no memory, 9/10 for original memory, and 10/10 for repaired memory; **zero duplicates**. The non-exposed visible condition scored 5/5 repaired vs 4/5 original **and 5/5 no-memory**. Repaired visible unsuccessful stops fell from 6/10 at cost 25 to 0/5 at cost 5. The difference is consistent with the reward-design confound, but the cross-price runs used fresh stochastic samples and different repetition counts; **do not claim a statistically paired causal effect**. The new setting has a ceiling effect that cannot distinguish repaired experience from no memory.
 - These comparisons establish observable **experience-conditioned agent behavior** in one synthetic refund family. They do not establish model-weight updates, statistically reliable improvement, or independent task-family transfer.
 
 Detailed G3/G4 run traces remain in local ignored `reports/runs/` files and user-supplied JSONL, not in Git. They are not recreated by these summaries.
 
-## Next decisive experiment: G4.4 inspection-price control
+## Next decisive gate: G5 transfer to a new task setting
 
-**Diagnostic confound:** The task prompt asks Savant to maximize net points, while success is worth +20, inspection costs 25, retry costs 1, and stopping costs 0. A safe recover-and-stop path with one inspection and one retry has a score of **−6**; stopping without success scores **0**. The stopped-with-zero-refunds trajectories may therefore reflect a rational reward tradeoff, rather than failure to transfer the repaired lesson. The simulator and training artifacts remain unchanged.
+**Result:** G4.4 supports incentive misalignment as a major alternative explanation for G4.3's unsuccessful stops. Lower inspection cost led to near-ceiling success for **all** memory arms. The repaired lesson did not demonstrate a distinct advantage over no memory on the non-exposed case. Further identical refund repetitions are not the decisive next investment.
 
-**One controlled intervention:** Run a new G4.4 comparison with **inspection price 5**, leaving success/duplicate rewards, retry/stop prices, agent-authored lessons, prompt structure, model settings, and simulator unchanged. The existing price-25 run is the historical comparator, **not a statistically paired price experiment** because model samples are fresh. The price change appears in the cost-sensitive system and user prompts and is provenance-bound in the new report and resume validator.
+**Research question:** Does Savant's existing *unchanged* agent-authored repair improve safety and successful action selection in a genuinely new tool/task setting, beyond no memory, the original lesson, and irrelevant-memory controls?
 
-- Fixed two V2 no-commit conditions (hidden used in repair feedback; visible not used in repair feedback).
-- Three arms: no memory, original self-acquired lesson, first self-repaired lesson; **five repetitions = 30 episodes**. No new self-repair call, alternate memory, or hand-authored behavioral policy.
-- Predeclared analysis: compare completed safe successes, duplicates, and specifically stopping after inspect(0). Contrast visible repaired-vs-original paired wins/losses inside the new price-5 run; compare descriptive failure patterns with the historical price-25 run.
-- **Pass for confound diagnosis, not G5:** fewer post-inspection unsuccessful stops with no safety regression supports incentive misalignment as a contributing factor. Repaired lesson needs a **net non-exposed success advantage** over original before claiming a positive transfer candidate. If both improve equally, classify as pricing effect, not improved repair.
-- One local bounded paid run; **$0.10 maximum**, no automatic retries. Use the existing full-repetition resume validator if interrupted, and do not alter G4.3 reports.
+**Minimal design contract before any paid inference:**
 
-This is exploratory, post-hoc and limited to one synthetic task family. It cannot close G5. If G4.4 still provides no repaired-vs-original visible advantage, the next intervention should target lesson quality or recovery-control policy **on fresh feedback**, without leaking the held-out evaluation cases into that intervention.
+1. Freeze the G3.1 original and G4.1 repaired lessons, including their source hashes. Do **not** rewrite them for the test task, hand-author a repair, or introduce labeled test feedback into the agent memory.
+2. Define at least one new independent workflow domain with different tool names/state transitions from the refund simulator. Include a task where wrong retries can cause duplicate side effects and where authoritative observation can establish completion, plus a negative-control condition where the refund lesson is irrelevant or misleading.
+3. Fix cases, prompts, reward/cost alignment, a simple deterministic truth oracle, and the scoring gate **before** calling Savant. Avoid rewards that favor abandonment; compare safe task completion, unsafe side effects, false positive transfers, and cost separately.
+4. Use paired repetitions with **no memory, original memory, repaired memory, and unrelated-memory control**, full observable traces, bounded inference and automated validation. No human reviewers or adjudication.
+5. **Transfer candidate threshold:** repaired experience must show a net paired safe-completion advantage over original and no memory on new relevant tasks, no extra unsafe outcomes, and no comparable uplift from unrelated memory. Report counterexamples and uncertainty rather than claiming broad generalization from a single new family.
+
+Engineering next: define the smallest executable new-world simulator and fixed cases, then add its paired harness and deterministic tests in one reviewable PR. Do not alter or retest the frozen G4 reports. G5 will remain **unproven** until those new tasks run successfully.
 
 ## Scope guardrails
 
-**In scope now:** one synthetic refund tool family; one real model via configured SubQ API; agent-authored experience and repairs; deterministic validation; fixed baselines; paired tests; traces and cost limits.
+**In scope now:** frozen refund-family acquisition/repair evidence; one new independently specified synthetic task setting for G5; one real model through the existing SubQ adapter; deterministic truth oracles, paired tests, negative controls, trace provenance and spending limits.
 
-**Out of scope until the G4 effect decision:** GPU fine-tuning/RL, multi-agent systems, new tool families, deployment, dashboards, hosted infrastructure, human reviewers, an LLM judge for deterministic state, and publication claims. G5 transfer requires a distinct, explicitly designed follow-up.
+**Out of scope:** GPU fine-tuning/RL, multi-agent systems, deployment, dashboards, hosted infrastructure, mandatory human review or adjudication, LLM judges for deterministic state, and publication claims. New-world G5 tests must not revise the G3/G4 evidence retrospectively.
 
 **One decision per milestone:** *Which uncertainty will this change resolve, and how will the result advance the active gate?* If there is no clear answer, do not build it.
 
