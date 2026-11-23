@@ -146,6 +146,7 @@ class TransferPilotTests(unittest.TestCase):
         summary = summarize(outcomes, 2)
         self.assertEqual(summary["episodes"], 48)
         self.assertIn("repaired_vs_controls_on_transfer_cases", summary)
+        self.assertEqual(summary["negative_control_outcomes"]["repaired_lesson"]["unsafe_outcomes"], 0)
         self.assertEqual(sum(x["result"]["unsafe_duplicate"] for x in outcomes), 0)
         self.assertEqual(sum(x["result"]["unauthorized_dispatch"] for x in outcomes), 0)
 
