@@ -64,9 +64,9 @@ Engineering next: define the smallest executable new-world simulator and fixed c
 
 ## Scope guardrails
 
-**In scope now:** one synthetic refund tool family; one real model via configured SubQ API; agent-authored experience and repairs; deterministic validation; fixed baselines; paired tests; traces and cost limits.
+**In scope now:** frozen refund-family acquisition/repair evidence; one new independently specified synthetic task setting for G5; one real model through the existing SubQ adapter; deterministic truth oracles, paired tests, negative controls, trace provenance and spending limits.
 
-**Out of scope until the G4 effect decision:** GPU fine-tuning/RL, multi-agent systems, new tool families, deployment, dashboards, hosted infrastructure, human reviewers, an LLM judge for deterministic state, and publication claims. G5 transfer requires a distinct, explicitly designed follow-up.
+**Out of scope:** GPU fine-tuning/RL, multi-agent systems, deployment, dashboards, hosted infrastructure, mandatory human review or adjudication, LLM judges for deterministic state, and publication claims. New-world G5 tests must not revise the G3/G4 evidence retrospectively.
 
 **One decision per milestone:** *Which uncertainty will this change resolve, and how will the result advance the active gate?* If there is no clear answer, do not build it.
 
