@@ -240,3 +240,36 @@ repetitions**, run the identical command with `--resume-from` pointing to its
 failed JSONL; retain `--case-set no_commit_v2` and `--repetitions 10` exactly.
 Only complete, trace-replayed repetitions qualify for reuse. Upload the new
 ignored `savant_repair_effect_*.jsonl` (or resumed) report for assessment.
+
+## G4.4: test the inspection-price incentive confound
+
+G4.3 completed all 60 episodes: repaired 11/20 safe successes, original
+8/20, no memory 2/20, with no duplicates. On the non-exposed visible condition,
+the original and repaired lessons tied at 4/10 successes. Three failed repaired
+runs stopped immediately; three inspected 0 committed refunds, then stopped.
+
+**Important:** Under the original synthetic reward contract, a successful
+one-inspection/one-retry recovery costs 25 + 1 but earns only 20, whereas an
+unsuccessful immediate stop scores 0. G4.4 isolates this cost incentive by
+changing only the **synthetic inspection cost** from 25 to 5. The same three
+memory arms, model/schema, cases, tool semantics, safety labels, and success
+reward remain frozen. This is **diagnostic**, not independent generalization.
+
+Sync `main`, keep the original three ignored source JSONL reports, and set
+`SUBQ_API_KEY` locally. The following is a *new*, explicitly authorized paid
+experiment: **5 repetitions x 2 cases x 3 arms = 30 episodes**, $0.10 maximum
+new spending, no automatic retries.
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+.\.venv\Scripts\python.exe -m repair_to_generalization.repair_effect_pilot --experience reports\runs\savant_acquisition_20261120_210809.jsonl --learning reports\runs\savant_learning_20261120_230142.jsonl --repair reports\runs\savant_repair_20261122_141925.jsonl --case-set no_commit_v2 --inspection-cost 5 --repetitions 5 --max-usd 0.10 --live
+```
+
+The report is written to ignored `reports/runs/savant_g44_cost5_*.jsonl`.
+If it stops after **one or more complete repetitions**, the same command may
+be resumed with `--resume-from` pointing at the failed report. The loader
+rejects previous reports at a different inspection price. Incomplete
+repetition fragments are not silently treated as complete. Upload the report
+for analysis of paired task success, unsafe duplicates, and unsuccessful
+inspect(0)->stop patterns before deciding whether to change the repair
+mechanism or move to a separately held-out G5 experiment.
