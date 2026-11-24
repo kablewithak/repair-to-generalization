@@ -110,29 +110,34 @@ Private G5.2 report SHA-256 values (initial, resume 1, resume 2):
 
 **Cycle 1 status:** closed with a limited/negative finding; research evidence score remains 62/100. Preserve source reports, traces, frozen protocols and all counterexamples. No further inference, infrastructure changes or independent confirmation are warranted under this cycle's gate. Its closeout handover is a historical evidence checkpoint, not the end of the overall project.
 
-## Cycle 2 — structured experiential learning (active research direction)
+## Cycle 2 — long-context experiential learning (active research direction)
 
-**Motivation:** Cycle 1 demonstrates acquisition and repair of textual experience, but not reliable improvement. In the G5.2 repaired-memory counterexample, the agent inspected again before a duplicate dispatch; a stale zero delivery count was not sufficient evidence of absence of outstanding work. One plausible explanation is that textual advice lacks sufficiently operational, context-dependent conditions, or that the agent fails to apply those conditions. The trajectory does not isolate representation, reasoning, selection or repair as the causal bottleneck.
+**Motivation:** Cycle 1 demonstrated acquisition and revision of textual experience, but not reliable learning or transfer. Compression may discard useful evidence; the observed failures do not isolate compression, reasoning, applicability, or repair as the cause.
 
-**Hypothesis:** agent-authored conditional experience, with explicit applicability assumptions, evidence requirements, action/outcome relationships and repairable uncertainty, can improve decisions beyond textual experience alone. Test rather than assume this benefit.
+**Hypothesis:** Access to accumulated original interaction evidence may enable Savant to reconstruct, reconcile and revise knowledge more effectively than compressed or retrieved experience alone. Long-context reasoning is a proposed mechanism, not a replacement for the locked north star. Test this with fixed weights and Savant as the sole model.
 
 | Gate | Required evidence | State |
 | --- | --- | --- |
-| G6 — Experience representation | Agent-authored structured experience from observed trajectories; controlled comparison with textual experience | Active — design next |
-| G7 — Autonomous adaptation | Agent detects a contradiction using its own public observations, invalidates or revises the relevant assumptions, and demonstrates improved behavior under drift | Planned |
-| G8 — Generalization | Repaired structured experience demonstrates distinctive, safe improvement on genuinely fresh held-out tasks versus relevant controls | Planned |
+| G6 — Experiential learning instrument | Linked, solvable task streams, public history ledger, deterministic oracles, leakage/replay tests, qualified response protocol and frozen splits | Active — design and qualify |
+| G7 — Long-context reconstruction | Matched comparison of no memory, compressed lessons, retrieved experience and full history | Planned |
+| G8 — Autonomous knowledge repair | Agent-detected contradictions, persistent evidence-linked revisions, subsequent learning gains and retention in independent closed-loop streams | Planned |
+| G9 — Compositional generalization | Safe transfer of repaired knowledge to fresh combinations of mechanisms, with independent confirmation | Planned |
+| G10 — Savant capability scaling and efficiency | Measured 25K/50K core context profile, interference/order sensitivity and cost per safe success | Planned |
+| G11 — Research release | Reproducible benchmark, measured findings, counterexamples, limitations and demonstration | Planned |
 
-G6–G8 extend the original research question. They do not retroactively pass G3–G5. Cycle 1 failure cases are now development evidence, not independent held-out confirmation for Cycle 2.
+G6–G11 supersede the earlier proposed structured-experience G6–G8 sequence. They do not retroactively pass G3–G5. Cycle 1 reports are development/regression evidence, not independent Cycle 2 confirmation.
 
-**Next decisive slice — G6:** inspect existing acquisition/repair contracts and failure trajectories; define the smallest conditional experience representation; freeze an information-matched textual-versus-structured ablation with no-memory controls and deterministic outcomes. The agent must extract the knowledge from its own public trajectories; the harness may validate schemas, provenance and invariants, but must not author the solution or silently substitute a hard-coded recovery policy. Keep model, case information, decision budgets and evaluation conditions comparable where feasible; distinguish effects of representation from extra information, inference or enforcement. Predefine scoring, safety criteria and limitations before paid runs. Treat the recurring output-limit interruptions as an execution blocker to resolve before the next substantial paid experiment.
+**Experimental contract:** One agent, five experience policies (A0 current task only; A1 agent-authored compressed lessons; A2 retrieved public experience; A3 complete public history; A4 complete history plus persistent agent-authored repair). Fixed-history comparisons use a common acquisition source; independent closed-loop comparisons use each arm's own interactions. Keep evaluation feedback out of learning. Deterministic code validates provenance, permissions and outcomes, not the correct strategy. Compare realized safe completion, paired wins/losses, unsafe regressions, retention and cost; avoid ceiling/floor effects. Positive claims require independent confirmation. Compositional transfer means combining learned principles on tasks without a complete historical solution.
 
-**Closeout principle:** advance only when the active slice resolves a meaningful uncertainty. Negative results may reject a mechanism, not automatically terminate the overall project. Preserve unfavorable evidence. No new inference spend is authorized by this documentation update; G6 experimental protocol and budget must be settled before execution.
+**Next decisive slice — G6:** inspect current contracts and output-limit traces; conduct targeted literature differentiation, verify provider settings and credit, qualify the bounded response protocol; extend the existing simulators with linked acquisition/drift streams, preserve genuine public trajectories and freeze the evaluation protocol. No artificial context padding. 10K is qualification, 25K and 50K core targets; larger tiers conditional on meaningful history and evidence. No large paid comparison before qualification. The private sprint plan controls detailed requirements and resource authorizations.
+
+**Closeout principle:** a valid negative result may close an experiment without passing a scientific gate. Pursue a distinct intervention only when supported by failure evidence; no retrospective gate changes or repeated attempts solely to obtain a pass. Research completion is separate from achieving the north star. The existing 62/100 qualitative checkpoint remains unchanged. No inference is authorized by this documentation update.
 
 ## Scope guardrails
 
-**In scope now:** frozen Cycle 1 evidence and development cases; structured agent-authored experience, applicability and contradiction-driven repair; controlled ablations and fresh held-out transfer; one real model through the existing SubQ adapter; deterministic truth oracles, paired tests, negative controls, trace provenance and spending limits. Reuse the current harness where practical.
+**In scope:** fixed-weight Savant, experience accumulation/reconstruction, autonomous repair and closed-loop learning, compositional transfer, controlled ablations, context scaling, deterministic evaluation and reproducible reporting. Reuse current code.
 
-**Out of scope:** GPU fine-tuning/RL, multi-agent systems, deployment, dashboards, hosted infrastructure, mandatory human review or adjudication, LLM judges for deterministic state, and publication claims. Cycle 2 tests must not revise the G1–G5 evidence retrospectively. Do not introduce a new learning mechanism's benefits as established before measurement.
+**Out of scope for Cycle 2:** other models or fallback models, weight training/RL, cloud deployment, multi-agent systems, dashboards, hosted infrastructure, human adjudication and unsupported superiority or novelty claims. The historical optional RL proposal is superseded for this programme.
 
 **One decision per milestone:** *Which uncertainty will this change resolve, and how will the result advance the active gate?* If there is no clear answer, do not build it.
 
