@@ -2,13 +2,17 @@
 
 > **Purpose:** A small public checkpoint, **not** the private PRD. Update this file only when evidence changes a research gate or the next decisive experiment. No separate progress bureaucracy.
 
+## Project status — 24 November 2026
+
+**Overall research project: ACTIVE (Cycle 2).** Cycle 1, the textual experience experiment, remains closed with limited/negative findings (PR #26). The project is reopened to test a materially different learning mechanism, not to erase those findings or rerun a failed comparison until it passes. The north star is unchanged; the existing research evidence checkpoint remains 62/100. Cycle 2 is planned, not implemented or validated.
+
 ## North star (locked)
 
 **Can an AI agent acquire experience from its own interactions, repair that experience when environmental assumptions fail, and apply the revised knowledge to unseen environments?**
 
 The contribution must concern **learning and transfer**. Verifier design, memory, benchmarks, and RL are means to answer this question, not independent workstreams.
 
-## Research gates
+## Cycle 1 research gates (historical evidence preserved)
 
 | Gate | Required evidence | State |
 | --- | --- | --- |
@@ -46,7 +50,7 @@ Detailed synthetic traces from the 20 November paired run are stored outside Git
 
 Detailed G3/G4 run traces remain in local ignored `reports/runs/` files and user-supplied JSONL, not in Git. They are not recreated by these summaries.
 
-## Next decisive gate: G5 transfer to a new task setting
+## Cycle 1: G5 transfer to a new task setting
 
 **Result:** G4.4 supports incentive misalignment as a major alternative explanation for G4.3's unsuccessful stops. Lower inspection cost led to near-ceiling success for **all** memory arms. The repaired lesson did not demonstrate a distinct advantage over no memory on the non-exposed case. Further identical refund repetitions are not the decisive next investment.
 
@@ -100,17 +104,35 @@ Private G5.2 report SHA-256 values (initial, resume 1, resume 2):
 - `c2d847bb44582a4e1f8d12e9c3b571d98a31a9a98002e71a6e87c5e9f2a14c74`
 - `e5209e82d67430f58e149fb2e41b20427611acc4ca78fa89fe3081e9ac549d13`
 
-## Research conclusion
+## Cycle 1 research conclusion
 
 **G1/G2 closed; G3/G4 mechanism demonstrated but beneficial learning/repair not established; G5 criterion not met.** Savant can produce and revise provenance-linked textual experience from its own trajectories. Reusing these lessons changes observed behavior, but the tested conditions do not establish reliable improvement, distinctive repaired-memory advantage, or safe generalization. Easy environments saturate across arms; the more diagnostic environment exposes a repaired-memory safety counterexample. The conclusion concerns this frozen model/lesson/harness combination; it is not a universal impossibility result and does not establish weight learning.
 
-**Status:** experimental cycle stopped with a limited/negative finding; research evidence score remains 62/100. Preserve source reports, traces, frozen protocols and all counterexamples. No further inference, infrastructure changes or independent confirmation are warranted under this cycle's gate. Final reproducibility and handover consolidation remains the administrative closeout task.
+**Cycle 1 status:** closed with a limited/negative finding; research evidence score remains 62/100. Preserve source reports, traces, frozen protocols and all counterexamples. No further inference, infrastructure changes or independent confirmation are warranted under this cycle's gate. Its closeout handover is a historical evidence checkpoint, not the end of the overall project.
+
+## Cycle 2 — structured experiential learning (active research direction)
+
+**Motivation:** Cycle 1 demonstrates acquisition and repair of textual experience, but not reliable improvement. In the G5.2 repaired-memory counterexample, the agent inspected again before a duplicate dispatch; a stale zero delivery count was not sufficient evidence of absence of outstanding work. One plausible explanation is that textual advice lacks sufficiently operational, context-dependent conditions, or that the agent fails to apply those conditions. The trajectory does not isolate representation, reasoning, selection or repair as the causal bottleneck.
+
+**Hypothesis:** agent-authored conditional experience, with explicit applicability assumptions, evidence requirements, action/outcome relationships and repairable uncertainty, can improve decisions beyond textual experience alone. Test rather than assume this benefit.
+
+| Gate | Required evidence | State |
+| --- | --- | --- |
+| G6 — Experience representation | Agent-authored structured experience from observed trajectories; controlled comparison with textual experience | Active — design next |
+| G7 — Autonomous adaptation | Agent detects a contradiction using its own public observations, invalidates or revises the relevant assumptions, and demonstrates improved behavior under drift | Planned |
+| G8 — Generalization | Repaired structured experience demonstrates distinctive, safe improvement on genuinely fresh held-out tasks versus relevant controls | Planned |
+
+G6–G8 extend the original research question. They do not retroactively pass G3–G5. Cycle 1 failure cases are now development evidence, not independent held-out confirmation for Cycle 2.
+
+**Next decisive slice — G6:** inspect existing acquisition/repair contracts and failure trajectories; define the smallest conditional experience representation; freeze an information-matched textual-versus-structured ablation with no-memory controls and deterministic outcomes. The agent must extract the knowledge from its own public trajectories; the harness may validate schemas, provenance and invariants, but must not author the solution or silently substitute a hard-coded recovery policy. Keep model, case information, decision budgets and evaluation conditions comparable where feasible; distinguish effects of representation from extra information, inference or enforcement. Predefine scoring, safety criteria and limitations before paid runs. Treat the recurring output-limit interruptions as an execution blocker to resolve before the next substantial paid experiment.
+
+**Closeout principle:** advance only when the active slice resolves a meaningful uncertainty. Negative results may reject a mechanism, not automatically terminate the overall project. Preserve unfavorable evidence. No new inference spend is authorized by this documentation update; G6 experimental protocol and budget must be settled before execution.
 
 ## Scope guardrails
 
-**In scope now:** frozen refund-family acquisition/repair evidence; one new independently specified synthetic task setting for G5; one real model through the existing SubQ adapter; deterministic truth oracles, paired tests, negative controls, trace provenance and spending limits.
+**In scope now:** frozen Cycle 1 evidence and development cases; structured agent-authored experience, applicability and contradiction-driven repair; controlled ablations and fresh held-out transfer; one real model through the existing SubQ adapter; deterministic truth oracles, paired tests, negative controls, trace provenance and spending limits. Reuse the current harness where practical.
 
-**Out of scope:** GPU fine-tuning/RL, multi-agent systems, deployment, dashboards, hosted infrastructure, mandatory human review or adjudication, LLM judges for deterministic state, and publication claims. New-world G5 tests must not revise the G3/G4 evidence retrospectively.
+**Out of scope:** GPU fine-tuning/RL, multi-agent systems, deployment, dashboards, hosted infrastructure, mandatory human review or adjudication, LLM judges for deterministic state, and publication claims. Cycle 2 tests must not revise the G1–G5 evidence retrospectively. Do not introduce a new learning mechanism's benefits as established before measurement.
 
 **One decision per milestone:** *Which uncertainty will this change resolve, and how will the result advance the active gate?* If there is no clear answer, do not build it.
 
