@@ -11,7 +11,7 @@ from repair_to_generalization.transfer_world import (
     CASES, ExportAction, ExportWorld, InitialState, ExportCase,
 )
 from repair_to_generalization.transfer_pilot import (
-    ARMS, FrozenSources, ExportDecision, load_resume, parse_export_response,
+    ARMS, CachedExportPolicy, FrozenSources, ExportDecision, load_resume, parse_export_response,
     payload_for, run_comparison, setup_for, summarize,
 )
 
@@ -133,6 +133,38 @@ class TransferPilotTests(unittest.TestCase):
         bad["choices"][0]["message"]["content"] = '{"action":"retry","reason_code":"uncertainty"}'
         with self.assertRaises(InvalidModelResponse):
             parse_export_response(bad)
+
+    def test_g5_output_budget_revision_and_truncation_is_billed_once(self):
+        payload = payload_for("no_memory", SOURCE, ExportWorld(CASES[0]), [])
+        setup = setup_for(SOURCE, 3)
+        self.assertEqual(payload["max_tokens"], 4096)
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertEqual(setup["model_max_output_tokens"], 4096)
+        self.assertEqual(setup["response_protocol_revision"], "output_budget_4096_v2")
+
+        truncated = {
+            "choices": [{"finish_reason": "length", "message": {"content": ""}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 4096},
+        }
+        requests = []
+
+        def decide(request):
+            requests.append(request)
+            return parse_export_response(truncated)
+
+        budget = Budget(max_usd=0.25, max_calls=2)
+        policy = CachedExportPolicy(decide, budget)
+        with self.assertRaisesRegex(InvalidModelResponse, "output_limit"):
+            policy.choose(payload)
+        self.assertEqual(requests, [payload])
+        self.assertEqual(budget.calls, 1)
+        self.assertAlmostEqual(budget.spent_usd, Usage(100, 0, 4096).usd)
+        self.assertEqual(policy.responses, {})
+
+        insufficient = Budget(max_usd=0.001, max_calls=1)
+        with self.assertRaisesRegex(RuntimeError, "dollar_limit_reached"):
+            insufficient.reserve(payload)
+        self.assertEqual(insufficient.calls, 0)
 
     def test_complete_paired_run_no_false_transfer_claim(self):
         events = []
