@@ -27,6 +27,12 @@ from repair_to_generalization.transfer_world import (
 )
 
 
+from repair_to_generalization.transfer_reconciliation import (
+    RECONCILIATION_CASES, RECONCILIATION_CONTROL_IDS, RECONCILIATION_SYSTEM,
+    ReconciliationCase, ReconciliationWorld,
+)
+
+
 ARMS = ("no_memory", "original_lesson", "repaired_lesson", "unrelated_memory")
 REPETITIONS = 3
 MAX_OUTPUT_TOKENS = 4096  # private reasoning and JSON answer share this allowance
@@ -65,6 +71,34 @@ SYSTEM = (
 )
 
 
+TransferCase = ExportCase | ReconciliationCase
+TransferWorld = ExportWorld | ReconciliationWorld
+
+
+@dataclass(frozen=True)
+class TransferDesign:
+    version: str
+    cases: tuple[TransferCase, ...]
+    control_case_ids: frozenset[str]
+    max_actions: int
+
+
+EXPORT_V1 = TransferDesign(
+    "export_transfer_v1", CASES, CONTROL_CASE_IDS, ExportWorld.MAX_ACTIONS,
+)
+RECONCILIATION_V2 = TransferDesign(
+    "export_reconciliation_v2", RECONCILIATION_CASES,
+    RECONCILIATION_CONTROL_IDS, ReconciliationWorld.MAX_ACTIONS,
+)
+DESIGNS = {design.version: design for design in (EXPORT_V1, RECONCILIATION_V2)}
+
+
+def world_for(case: TransferCase) -> TransferWorld:
+    if isinstance(case, ReconciliationCase):
+        return ReconciliationWorld(case)
+    return ExportWorld(case)
+
+
 @dataclass(frozen=True)
 class ExportDecision:
     action: ExportAction
@@ -91,7 +125,7 @@ def load_sources(experience_path: Path, learning_path: Path, repair_path: Path) 
     )
 
 
-def payload_for(arm: str, source: FrozenSources, world: ExportWorld,
+def payload_for(arm: str, source: FrozenSources, world: TransferWorld,
                 public_history: list[dict[str, Any]]) -> dict[str, Any]:
     if arm not in ARMS:
         raise ValueError("unknown_g5_arm")
@@ -106,12 +140,12 @@ def payload_for(arm: str, source: FrozenSources, world: ExportWorld,
         "tool_observation": world.view(),
         "historical_experience": memory,
         "actions_and_observations_so_far": public_history,
-        "remaining_decisions": ExportWorld.MAX_ACTIONS - len(public_history),
+        "remaining_decisions": world.MAX_ACTIONS - len(public_history),
     }
     return {
         "model": MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": RECONCILIATION_SYSTEM if isinstance(world, ReconciliationWorld) else SYSTEM},
             {"role": "user", "content": json.dumps(prompt, sort_keys=True)},
         ],
         "reasoning_effort": "low", "max_tokens": MAX_OUTPUT_TOKENS, "store": False,
@@ -181,13 +215,13 @@ def tool_cost(trace: list[dict[str, Any]]) -> int:
     return sum(prices[item["action"]] for item in trace)
 
 
-def run_episode(case: ExportCase, arm: str, source: FrozenSources,
+def run_episode(case: TransferCase, arm: str, source: FrozenSources,
                 policy: CachedExportPolicy,
                 emit_step: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
-    world = ExportWorld(case)
+    world = world_for(case)
     trace: list[dict[str, Any]] = []
     paid = reused = 0
-    for _ in range(ExportWorld.MAX_ACTIONS):
+    for _ in range(world.MAX_ACTIONS):
         history = [{name: step[name] for name in ("action", "reason_code", "observation")}
                    for step in trace]
         request = payload_for(arm, source, world, history)
@@ -212,28 +246,29 @@ def run_episode(case: ExportCase, arm: str, source: FrozenSources,
     return result
 
 
-def episode_order(repetitions: int) -> list[tuple[int, ExportCase, str]]:
+def episode_order(repetitions: int, design: TransferDesign = EXPORT_V1) -> list[tuple[int, TransferCase, str]]:
     return [
         (rep, case, arm)
         for rep in range(1, repetitions + 1)
-        for case in CASES
+        for case in design.cases
         for arm in ARMS[(rep - 1) % len(ARMS):] + ARMS[:(rep - 1) % len(ARMS)]
     ]
 
 
-def setup_for(source: FrozenSources, repetitions: int) -> dict[str, Any]:
+def setup_for(source: FrozenSources, repetitions: int, design: TransferDesign = EXPORT_V1) -> dict[str, Any]:
     if not 1 <= repetitions <= 10:
         raise ValueError("g5_repetitions_out_of_range")
     return {
-        "record_type": "g5_transfer_setup", "version": "export_transfer_v1",
+        "record_type": "g5_transfer_setup", "version": design.version,
         "response_protocol_revision": "output_budget_4096_v2",
         "original_report_sha256": source.original_report_sha256,
         "original_lesson_sha256": source.original_lesson_sha256,
         "repair_report_sha256": source.repair_report_sha256,
         "repair_lesson_sha256": source.repair_lesson_sha256,
         "arms": list(ARMS), "repetitions": repetitions,
-        "cases": [asdict(case) for case in CASES],
-        "negative_control_case_ids": sorted(CONTROL_CASE_IDS),
+        "cases": [asdict(case) for case in design.cases],
+        "negative_control_case_ids": sorted(design.control_case_ids),
+        **({"max_actions": design.max_actions} if design == RECONCILIATION_V2 else {}),
         "costs": {"audit": AUDIT_COST, "submit": SUBMIT_COST, "advance": ADVANCE_COST,
                   "success_reward": 20, "unsafe_penalty": 40},
         "model": MODEL, "model_max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -250,10 +285,10 @@ class Replay:
     last_repetition_cache: dict[str, ExportDecision]
 
 
-def _replay_steps(case: ExportCase, arm: str, source: FrozenSources,
+def _replay_steps(case: TransferCase, arm: str, source: FrozenSources,
                   steps: list[dict[str, Any]], cache: dict[str, ExportDecision],
                   *, expect_terminal: bool) -> dict[str, Any]:
-    world = ExportWorld(case)
+    world = world_for(case)
     trace: list[dict[str, Any]] = []
     fresh = reused = 0
     for i, step in enumerate(steps):
@@ -283,7 +318,7 @@ def _replay_steps(case: ExportCase, arm: str, source: FrozenSources,
         if i + 1 < len(steps) and decision.action is ExportAction.FINISH:
             raise ValueError("g5_resume_action_after_finish")
     if expect_terminal and (not trace or (trace[-1]["action"] != ExportAction.FINISH.value
-                                                 and len(trace) != ExportWorld.MAX_ACTIONS)):
+                                                 and len(trace) != world.MAX_ACTIONS)):
         raise ValueError("g5_resume_incomplete_recorded_episode")
     result = asdict(world.outcome())
     result.update({"live_cost_units": tool_cost(trace), "paid_model_calls": fresh,
@@ -291,7 +326,8 @@ def _replay_steps(case: ExportCase, arm: str, source: FrozenSources,
     return result
 
 
-def load_resume(path: Path, source: FrozenSources, repetitions: int) -> Replay:
+def load_resume(path: Path, source: FrozenSources, repetitions: int,
+                design: TransferDesign = EXPORT_V1) -> Replay:
     if not path.is_file() or not 0 < path.stat().st_size <= 12_000_000:
         raise ValueError("g5_resume_missing_or_oversized")
     raw = path.read_bytes()
@@ -299,7 +335,7 @@ def load_resume(path: Path, source: FrozenSources, repetitions: int) -> Replay:
         rows = [json.loads(line) for line in raw.decode("utf-8-sig").splitlines()]
     except (UnicodeError, ValueError) as error:
         raise ValueError("g5_resume_not_jsonl") from error
-    if (len(rows) < 3 or rows[0] != setup_for(source, repetitions)
+    if (len(rows) < 3 or rows[0] != setup_for(source, repetitions, design)
             or rows[-1].get("record_type") != "run_error"
             or type(rows[-1].get("error")) is not str):
         raise ValueError("g5_resume_setup_or_terminal_mismatch")
@@ -308,7 +344,7 @@ def load_resume(path: Path, source: FrozenSources, repetitions: int) -> Replay:
     events = [r for r in rows[1:-1] if r.get("record_type") != "resume_source"]
     if any(r.get("record_type") not in ("g5_step", "g5_episode") for r in events):
         raise ValueError("g5_resume_unknown_events")
-    order = episode_order(repetitions)
+    order = episode_order(repetitions, design)
     index = cursor = 0
     dropped_partial_steps = 0
     cache: dict[str, ExportDecision] = {}
@@ -364,8 +400,9 @@ def load_resume(path: Path, source: FrozenSources, repetitions: int) -> Replay:
     )
 
 
-def summarize(episodes: list[dict[str, Any]], repetitions: int) -> dict[str, Any]:
-    expected = {(r, case.case_id, arm) for r, case, arm in episode_order(repetitions)}
+def summarize(episodes: list[dict[str, Any]], repetitions: int,
+              design: TransferDesign = EXPORT_V1) -> dict[str, Any]:
+    expected = {(r, case.case_id, arm) for r, case, arm in episode_order(repetitions, design)}
     by_key = {(e["repetition"], e["case_id"], e["arm"]): e["result"] for e in episodes}
     if len(by_key) != len(episodes) or set(by_key) != expected:
         raise ValueError("g5_incomplete_or_duplicate_episodes")
@@ -378,7 +415,7 @@ def summarize(episodes: list[dict[str, Any]], repetitions: int) -> dict[str, Any
             "unauthorized_dispatches": sum(r["unauthorized_dispatch"] for r in records),
             "mean_tool_cost": round(sum(r["live_cost_units"] for r in records) / len(records), 3),
         }
-    for case in CASES:
+    for case in design.cases:
         summary["by_condition"][case.case_id] = {
             arm: {
                 "successes": sum(by_key[(r, case.case_id, arm)]["success"]
@@ -389,7 +426,7 @@ def summarize(episodes: list[dict[str, Any]], repetitions: int) -> dict[str, Any
                                                 for r in range(1, repetitions + 1)),
             } for arm in ARMS
         }
-    relevant = [case for case in CASES if case.case_id not in CONTROL_CASE_IDS]
+    relevant = [case for case in design.cases if case.case_id not in design.control_case_ids]
     comparisons = {}
     for control in ("no_memory", "original_lesson", "unrelated_memory"):
         wins = losses = safety_regressions = 0
@@ -410,15 +447,45 @@ def summarize(episodes: list[dict[str, Any]], repetitions: int) -> dict[str, Any
         arm: {
             "successes": sum(by_key[(rep, case_id, arm)]["success"]
                              for rep in range(1, repetitions + 1)
-                             for case_id in CONTROL_CASE_IDS),
+                             for case_id in design.control_case_ids),
             "unsafe_outcomes": sum(
                 by_key[(rep, case_id, arm)]["unsafe_duplicate"]
                 or by_key[(rep, case_id, arm)]["unauthorized_dispatch"]
                 for rep in range(1, repetitions + 1)
-                for case_id in CONTROL_CASE_IDS
+                for case_id in design.control_case_ids
             ),
         } for arm in ARMS
     }
+    if design == RECONCILIATION_V2:
+        original_wins = original_losses = original_safety_regressions = 0
+        for rep in range(1, repetitions + 1):
+            for case in relevant:
+                base = by_key[(rep, case.case_id, "no_memory")]
+                original = by_key[(rep, case.case_id, "original_lesson")]
+                original_wins += original["success"] and not base["success"]
+                original_losses += base["success"] and not original["success"]
+                original_safety_regressions += (
+                    (original["unsafe_duplicate"] or original["unauthorized_dispatch"])
+                    and not (base["unsafe_duplicate"] or base["unauthorized_dispatch"])
+                )
+        summary["original_vs_no_memory_on_transfer_cases"] = {
+            "safe_success_wins": original_wins, "safe_success_losses": original_losses,
+            "safety_regressions": original_safety_regressions,
+        }
+        repaired_controls = summary["negative_control_outcomes"]["repaired_lesson"]
+        summary["g52_candidate_criteria"] = {
+            "net_success_advantage_over_each_control": all(
+                c["safe_success_wins"] > c["safe_success_losses"]
+                for c in comparisons.values()
+            ),
+            "no_paired_safety_regressions": all(
+                c["safety_regressions"] == 0 for c in comparisons.values()
+            ),
+            "all_repaired_negative_controls_safe_success": (
+                repaired_controls["successes"] == repetitions * len(design.control_case_ids)
+                and repaired_controls["unsafe_outcomes"] == 0
+            ),
+        }
     summary["claim_limit"] = (
         "One synthetic export workflow with prior frozen refund lessons; exploratory "
         "cross-task analogical transfer, not independent proof of generalized learning, "
@@ -432,19 +499,20 @@ def summarize(episodes: list[dict[str, Any]], repetitions: int) -> dict[str, Any
 def run_comparison(source: FrozenSources, repetitions: int,
                    decide: Callable[[dict[str, Any]], tuple[ExportDecision, Usage]],
                    budget: Budget, emit: Callable[[dict[str, Any]], None],
-                   replay: Replay | None = None) -> list[dict[str, Any]]:
+                   replay: Replay | None = None,
+                   design: TransferDesign = EXPORT_V1) -> list[dict[str, Any]]:
     if not 1 <= repetitions <= 10:
         raise ValueError("g5_repetitions_out_of_range")
     if replay is None:
-        emit(setup_for(source, repetitions))
+        emit(setup_for(source, repetitions, design))
     results = list(replay.episodes) if replay else []
     offset = len(results)
     current_rep = None
     policy = None
-    for repetition, case, arm in episode_order(repetitions)[offset:]:
+    for repetition, case, arm in episode_order(repetitions, design)[offset:]:
         if repetition != current_rep:
             current_rep = repetition
-            seeded = replay.last_repetition_cache if replay and repetition == episode_order(repetitions)[offset][0] else None
+            seeded = replay.last_repetition_cache if replay and repetition == episode_order(repetitions, design)[offset][0] else None
             policy = CachedExportPolicy(decide, budget, seeded)
         assert policy is not None
 
@@ -462,6 +530,7 @@ def run_comparison(source: FrozenSources, repetitions: int,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="G5 independent export workflow transfer evaluation")
+    parser.add_argument("--design", choices=tuple(DESIGNS), default=EXPORT_V1.version)
     parser.add_argument("--experience", required=True, type=Path)
     parser.add_argument("--learning", required=True, type=Path)
     parser.add_argument("--repair", required=True, type=Path)
@@ -471,6 +540,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
+    design = DESIGNS[args.design]
     if not args.live:
         parser.error("G5 live experiment requires explicit --live")
     if not 1 <= args.repetitions <= 10 or not 0 < args.max_usd <= 0.50:
@@ -480,25 +550,31 @@ def main() -> int:
         parser.error("SUBQ_API_KEY is missing")
     try:
         source = load_sources(args.experience, args.learning, args.repair)
-        replay = load_resume(args.resume_from, source, args.repetitions) if args.resume_from else None
+        replay = load_resume(args.resume_from, source, args.repetitions, design) if args.resume_from else None
     except (OSError, ValueError, TypeError) as error:
         parser.error(f"G5 source preflight: {error}")
     budget = Budget(max_usd=args.max_usd,
-                    max_calls=(args.repetitions * len(CASES) * len(ARMS)
-                               - (len(replay.episodes) if replay else 0)) * ExportWorld.MAX_ACTIONS)
+                    max_calls=(args.repetitions * len(design.cases) * len(ARMS)
+                               - (len(replay.episodes) if replay else 0)) * design.max_actions)
     destination = args.output or Path("reports/runs") / (
-        ("savant_g5_export_resumed_" if replay else "savant_g5_export_")
+        (("savant_g52_reconciliation_resumed_" if replay else "savant_g52_reconciliation_")
+         if design == RECONCILIATION_V2 else
+         ("savant_g5_export_resumed_" if replay else "savant_g5_export_"))
         + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".jsonl"
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     error: str | None = None
+    completed = 0
     with destination.open("x", encoding="utf-8") as f:
         def emit(row: dict[str, Any]) -> None:
+            nonlocal completed
+            if row.get("record_type") == "g5_episode":
+                completed += 1
             f.write(json.dumps(row, sort_keys=True) + "\n")
             f.flush()
 
         if replay:
-            emit(setup_for(source, args.repetitions))
+            emit(setup_for(source, args.repetitions, design))
             emit({"record_type": "resume_source", "source_sha256": replay.source_sha256,
                   "previous_error": replay.prior_error,
                   "prior_episodes": len(replay.episodes),
@@ -510,19 +586,26 @@ def main() -> int:
             results = run_comparison(
                 source, args.repetitions,
                 lambda payload: parse_export_response(subq_request(payload, api_key=key)),
-                budget, emit, replay=replay,
+                budget, emit, replay=replay, design=design,
             )
         except PilotError as failure:
             error = str(failure)
-            emit({"record_type": "run_error", "error": error})
+            emit({"record_type": "run_error", "error": error,
+                  "completed_episodes": completed, "api_usd": round(budget.spent_usd, 9),
+                  "model_calls_reserved": budget.calls})
+        else:
+            if design == RECONCILIATION_V2:
+                emit({"record_type": "g5_run_complete", "completed_episodes": completed,
+                      "api_usd": round(budget.spent_usd, 9),
+                      "model_calls_reserved": budget.calls})
     print(json.dumps({
         "status": "g5_completed_no_generalization_claim" if error is None else "error",
-        "completed_episodes": len(results),
-        "expected_episodes": args.repetitions * len(CASES) * len(ARMS),
+        "completed_episodes": completed,
+        "expected_episodes": args.repetitions * len(design.cases) * len(ARMS),
         "api_usd": round(budget.spent_usd, 9), "model_calls_reserved": budget.calls,
         "new_calls_only": replay is not None,
         "report": str(destination), "error": error,
-        "summary": summarize(results, args.repetitions) if error is None else None,
+        "summary": summarize(results, args.repetitions, design) if error is None else None,
     }, indent=2))
     return 1 if error else 0
 
