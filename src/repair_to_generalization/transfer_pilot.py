@@ -29,7 +29,7 @@ from repair_to_generalization.transfer_world import (
 
 ARMS = ("no_memory", "original_lesson", "repaired_lesson", "unrelated_memory")
 REPETITIONS = 3
-MAX_OUTPUT_TOKENS = 2048
+MAX_OUTPUT_TOKENS = 4096  # private reasoning and JSON answer share this allowance
 AUDIT_COST = 3
 SUBMIT_COST = 1
 ADVANCE_COST = 1
@@ -226,6 +226,7 @@ def setup_for(source: FrozenSources, repetitions: int) -> dict[str, Any]:
         raise ValueError("g5_repetitions_out_of_range")
     return {
         "record_type": "g5_transfer_setup", "version": "export_transfer_v1",
+        "response_protocol_revision": "output_budget_4096_v2",
         "original_report_sha256": source.original_report_sha256,
         "original_lesson_sha256": source.original_lesson_sha256,
         "repair_report_sha256": source.repair_report_sha256,
