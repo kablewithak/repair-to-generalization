@@ -83,8 +83,17 @@ def setup(commit, prior, cap):
 
 
 class Run:
-    def __init__(self, meter, emit):
+    def __init__(self, meter, emit, *, cohort=None, schedule=None, learning_mask=None):
         self.meter, self.emit = meter, emit
+        self.cohort = cases() if cohort is None else tuple(cohort)
+        self.schedule = order() if schedule is None else tuple(schedule)
+        self.learning_mask = tuple(s[-1] for s in SPECS) if learning_mask is None else tuple(learning_mask)
+        if (len(self.cohort) != len(self.learning_mask)
+                or any(type(flag) is not bool for flag in self.learning_mask)
+                or len(self.schedule) != len(self.cohort) * len(ARMS)
+                or any([i for i, a in self.schedule if a == arm] != list(range(1, len(self.cohort)+1))
+                       for arm in ARMS)):
+            raise ValueError("invalid_closed_loop_schedule")
         self.ledgers = {a: Ledger() for a in ARMS}
         self.records = {a: [] for a in ARMS}
         self.claims = ()
@@ -92,10 +101,9 @@ class Run:
         self.rows = []
 
     def run(self):
-        cohort = cases()
-        for episode, arm in order():
-            case = cohort[episode-1]
-            learning_phase = SPECS[episode-1][-1]
+        for episode, arm in self.schedule:
+            case = self.cohort[episode-1]
+            learning_phase = self.learning_mask[episode-1]
             learning = learning_phase and arm != "A0"
             prior = self.ledgers[arm]
             memory = active_claims(self.claims) if arm == "A4" else []
@@ -164,8 +172,8 @@ class Run:
     def verify(self):
         for arm in ARMS:
             n = len(self.records[arm])
-            mask = tuple(s[-1] and arm != "A0" for s in SPECS[:n])
-            replay(cases()[:n], tuple(self.records[arm]), self.ledgers[arm], mask)
+            mask = tuple(flag and arm != "A0" for flag in self.learning_mask[:n])
+            replay(self.cohort[:n], tuple(self.records[arm]), self.ledgers[arm], mask)
 
     def summary(self):
         totals = {}
