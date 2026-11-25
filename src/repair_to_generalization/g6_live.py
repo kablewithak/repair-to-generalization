@@ -254,7 +254,7 @@ def main() -> int:
     parser.add_argument("--prior-spend-usd", type=float, required=True)
     parser.add_argument("--max-usd", type=float, default=1.5)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--protocol", choices=PROTOCOLS, default=ACTION_ONLY_REVISION)
+    parser.add_argument("--protocol", choices=PROTOCOLS, default=REVISION)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     if not args.live:
