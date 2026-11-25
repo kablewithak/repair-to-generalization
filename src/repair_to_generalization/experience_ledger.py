@@ -113,12 +113,15 @@ def execute(case: Scenario, prior: Ledger, episode: int, learning: bool, access:
                                         result_ledger.head, learning)
 
 
-def replay(cases: tuple[Scenario, ...], records: tuple[EpisodeRecord, ...], expected: Ledger):
+def replay(cases: tuple[Scenario, ...], records: tuple[EpisodeRecord, ...], expected: Ledger,
+           learning_mask: tuple[bool, ...]):
     """Validate each actual transition, evaluator outcome and learning exclusion."""
-    if len(cases) != len(records):
+    if len(cases) != len(records) or len(cases) != len(learning_mask):
         raise ValueError("replay_length_mismatch")
     ledger = Ledger()
     for episode, (case, record) in enumerate(zip(cases, records), 1):
+        if type(learning_mask[episode - 1]) is not bool or record.learning is not learning_mask[episode - 1]:
+            raise ValueError("replay_learning_split_mismatch")
         moves = iter(record.actions)
 
         def decide(_):
