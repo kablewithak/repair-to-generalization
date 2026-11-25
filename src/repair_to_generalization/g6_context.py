@@ -22,18 +22,24 @@ from .g6_live import (
     ACTION_ONLY_REVISION, ARMS, CONTEXT_TARGET, MAX_INPUT_BYTES, SEED,
     case_order, manifest, parse_linked, payload_for,
 )
-from .g6_qualification import Meter, OUTPUT_LIMIT, PROJECT_CAP_USD, RESERVE_USD, digest, reservation
+from .g6_qualification import (
+    Meter, OUTPUT_LIMIT, FRAMING_MARGIN, PROJECT_CAP_USD, RESERVE_USD, digest, reservation,
+)
 from .linked_world import MAX_ACTIONS, Move, Scenario, development_stream
 from .refund_simulator import ToolSemantics
 from .transfer_reconciliation import ReceiptSource
 from .transfer_world import InitialState
-from .savant_pilot import MODEL, PilotError, Usage, subq_request
+from .savant_pilot import MODEL, INPUT_PER_MILLION, OUTPUT_PER_MILLION, PilotError, Usage, subq_request
 
 REVISION = "g6_context_10k_dev_v1"
 MAX_RUN_USD = 1.5
 ACQUISITION_COUNT = 8
 PROBE_COUNT = 3
 MAX_CALLS = (ACQUISITION_COUNT + PROBE_COUNT) * MAX_ACTIONS
+WORST_CASE_USD = MAX_CALLS * (
+    (MAX_INPUT_BYTES + FRAMING_MARGIN) * INPUT_PER_MILLION
+    + OUTPUT_LIMIT * OUTPUT_PER_MILLION
+) / 1_000_000
 
 
 def require(ok: bool, reason: str) -> None:
@@ -109,7 +115,7 @@ def load_source(path: Path) -> Source:
                     and done.get("unknown_reserved_usd") == 0, "source_response_not_valid")
             usage = Usage(**done["usage"])
             require(all(type(v) is int and v >= 0 for v in asdict(usage).values())
-                    and usage.cached_tokens <= usage.prompt_tokens <= size + 1024
+                    and usage.cached_tokens <= usage.prompt_tokens <= size + FRAMING_MARGIN
                     and usage.completion_tokens <= OUTPUT_LIMIT, "source_usage_invalid")
             require(math.isclose(usage.usd, done["accounted_usd"], abs_tol=1e-12)
                     and math.isclose(usage.usd, done["reported_usd"], abs_tol=1e-12),
@@ -168,7 +174,7 @@ def additional_cases(service: str) -> tuple[Scenario, ...]:
         # Three fresh, representative nonlearning qualification probes.
         (True, False, True, False, False, False, False),
         (False, True, False, True, False, True, False),
-        (True, True, True, True, False, False, True),
+        (True, True, True, True, True, False, True),
     )
     return tuple(Scenario(
         case_id=f"g6-context-dev-{i+1}", service=service, version="v2",
@@ -286,6 +292,12 @@ def main() -> int:
               "cases": [asdict(c) for c in run.cases], "acquisition_count": ACQUISITION_COUNT,
               "probe_count": PROBE_COUNT, "max_calls": MAX_CALLS, "max_actions": MAX_ACTIONS,
               "max_output_tokens": OUTPUT_LIMIT, "max_input_bytes": MAX_INPUT_BYTES,
+              "reasoning_effort": "low", "fresh_calls_only": True,
+              "context_target": CONTEXT_TARGET, "framing_margin": FRAMING_MARGIN,
+              "prompt_sha256": manifest(source.cases, commit, args.prior_spend_usd,
+                                        args.max_usd, ACTION_ONLY_REVISION)["prompt_sha256"],
+              "projected_uncapped_worst_case_usd": WORST_CASE_USD,
+              "stop_rule": "stop on provider, response contract or budget failure; no automatic retry",
               "prior_spend_usd": args.prior_spend_usd, "authorized_cap_usd": args.max_usd,
               "project_cap_usd": PROJECT_CAP_USD, "reserve_usd": RESERVE_USD,
               "started_utc": datetime.now(timezone.utc).isoformat()})
