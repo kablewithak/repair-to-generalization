@@ -23,7 +23,7 @@ from .g6_live import ACTION_ONLY_REVISION, parse_linked, payload_for
 from .g6_qualification import (
     Meter, OUTPUT_LIMIT, FRAMING_MARGIN, PROJECT_CAP_USD, RESERVE_USD, digest, reservation,
 )
-from .linked_world import CONTRACT, MAX_ACTIONS, Scenario
+from .linked_world import CONTRACT, MAX_ACTIONS, Move, Scenario
 from .savant_pilot import MODEL, INPUT_PER_MILLION, OUTPUT_PER_MILLION, PilotError, Usage, subq_request
 from .study_design import (
     CONTEXT_TARGET, MAX_ACQUISITION, MAX_INPUT_BYTES, MIN_ACQUISITION, STOP_RULE,
@@ -168,6 +168,11 @@ def load_source(path: Path) -> FrozenSource:
     require(len(rows) >= 2, "study_source_missing_records")
     setup, terminal = rows[0], rows[-1]
     expected = setup_for(setup["commit"], setup["prior_spend_usd"], setup["authorized_cap_usd"])
+    require(math.isfinite(setup["prior_spend_usd"]) and setup["prior_spend_usd"] >= 0
+            and math.isfinite(setup["authorized_cap_usd"])
+            and 0 < setup["authorized_cap_usd"] <= MAX_RUN_USD
+            and setup["prior_spend_usd"] + setup["authorized_cap_usd"] + RESERVE_USD <= PROJECT_CAP_USD,
+            "study_source_invalid_budget")
     require(all(setup.get(k) == json.loads(canonical(v)) for k, v in expected.items()),
             "study_source_manifest_mismatch")
     require(terminal.get("record_type") == "study_source_terminal"
@@ -229,7 +234,6 @@ def load_source(path: Path) -> FrozenSource:
             decision = done["decision"]
             require(set(decision) == {"action", "reason_code"} and decision["reason_code"] is None,
                     "study_source_decision_mismatch")
-            from .linked_world import Move
             return Move(decision["action"])
 
         def observe(public):
