@@ -82,6 +82,23 @@ def response_metadata(data: dict[str, Any]) -> tuple[str | None, int | None]:
             tokens if type(tokens) is int and tokens >= 0 else None)
 
 
+def response_content_shape(data: dict[str, Any]) -> dict[str, Any] | None:
+    """Record answer shape only, not raw output or private reasoning text."""
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    message = choice.get("message") if isinstance(choice, dict) else None
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if not isinstance(content, str):
+        return {"kind": "null" if content is None else "non_string"}
+    encoded = content.encode("utf-8", errors="surrogatepass")
+    return {"kind": "string", "characters": len(content), "utf8_bytes": len(encoded),
+            "whitespace_characters": sum(ch.isspace() for ch in content),
+            "trailing_whitespace_characters": len(content) - len(content.rstrip()),
+            "sha256": hashlib.sha256(encoded).hexdigest()}
+
+
 class Meter:
     """Reserve before IO; unknown billed usage consumes the conservative bound."""
 
@@ -114,11 +131,13 @@ class Meter:
         failure: PilotError | None = None
         finish_reason = None
         reasoning_tokens = None
+        content_shape = None
         try:
             data = self.request(payload)
             if not isinstance(data, dict):
                 raise PilotError("invalid_http_body")
             finish_reason, reasoning_tokens = response_metadata(data)
+            content_shape = response_content_shape(data)
             decision, usage = self.parser(data)
             if data.get("model", MODEL) != MODEL:
                 raise InvalidModelResponse("g6_model_mismatch", usage)
@@ -150,6 +169,7 @@ class Meter:
         self.emit({"record_type": "call_finished", "call_id": call_id,
                    "episode": episode, "step": step,
                    "finish_reason": finish_reason, "reasoning_tokens": reasoning_tokens,
+                   "content_shape": content_shape,
                    "latency_ms": round((time.monotonic() - started) * 1000, 3),
                    "usage": asdict(usage) if usage is not None else None,
                    "reported_usd": usage.usd if usage is not None else None,
