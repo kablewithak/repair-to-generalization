@@ -3,7 +3,7 @@ import json
 import unittest
 
 from repair_to_generalization.g6_live import (
-    ARMS, MAX_CALLS, MAX_INPUT_BYTES, OUTPUT_LIMIT, SEED, DevelopmentRun,
+    ACTION_ONLY_REVISION, REVISION, ARMS, MAX_CALLS, MAX_INPUT_BYTES, OUTPUT_LIMIT, SEED, DevelopmentRun,
     case_order, manifest, parse_linked, payload_for,
 )
 from repair_to_generalization.g6_qualification import Meter
@@ -131,6 +131,78 @@ class LiveInstrumentTests(unittest.TestCase):
         self.assertEqual(setup["max_calls"], 288)
         self.assertEqual(payload_for({})["max_tokens"], OUTPUT_LIMIT)
         self.assertEqual(setup["authorized_cap_usd"], 1.5)
+
+
+    def test_action_only_changes_schema_not_prompt_or_limits(self):
+        old = payload_for({"example": 1}, REVISION)
+        new = payload_for({"example": 1}, ACTION_ONLY_REVISION)
+        old_schema = old.pop("response_format")
+        new_schema = new.pop("response_format")
+        self.assertEqual(old, new)
+        self.assertEqual(old_schema["json_schema"]["schema"]["required"], ["action", "reason_code"])
+        self.assertEqual(new_schema["json_schema"]["schema"]["required"], ["action"])
+        self.assertEqual(new_schema["json_schema"]["schema"]["properties"]["action"],
+                         old_schema["json_schema"]["schema"]["properties"]["action"])
+        a = manifest(self.cases, "test-commit", 0.8, 1.5, REVISION)
+        b = manifest(self.cases, "test-commit", 0.8, 1.5, ACTION_ONLY_REVISION)
+        self.assertEqual(b["revision"], ACTION_ONLY_REVISION)
+        self.assertNotEqual(a["prompt_sha256"], b["prompt_sha256"])
+        for key in ("order", "cases", "max_calls", "max_output_tokens", "max_actions"):
+            self.assertEqual(a[key], b[key])
+
+    def test_action_only_strict_parse_and_usage(self):
+        data = response("finish")
+        data["choices"][0]["message"]["content"] = '{"action":"finish"}'
+        decision, usage = parse_linked(data, ACTION_ONLY_REVISION)
+        self.assertIs(decision.action, Move.FINISH)
+        self.assertIsNone(decision.reason_code)
+        self.assertEqual(usage, Usage(100, 0, 40))
+        with self.assertRaises(InvalidModelResponse):
+            parse_linked(data, REVISION)
+        for body in ('{"action":"invented"}', '{"action":"finish","reason_code":"goal_complete"}',
+                     '{"action":"finish","action":"retry_refund"}', '{}', '{"action":null}', 'finish'):
+            data["choices"][0]["message"]["content"] = body
+            with self.assertRaises(InvalidModelResponse) as error:
+                parse_linked(data, ACTION_ONLY_REVISION)
+            self.assertEqual(error.exception.usage, usage)
+
+    def test_action_only_stream_replays(self):
+        def request(payload):
+            data = fake_reference(payload)
+            decision = json.loads(data["choices"][0]["message"]["content"])
+            data["choices"][0]["message"]["content"] = json.dumps({"action": decision["action"]})
+            return data
+        meter = Meter(2.0, request, self.events.append,
+                      parser=lambda data: parse_linked(data, ACTION_ONLY_REVISION),
+                      max_calls=MAX_CALLS, max_input_bytes=MAX_INPUT_BYTES)
+        run = DevelopmentRun(meter, self.events.append, self.cases, ACTION_ONLY_REVISION)
+        run.run()
+        run.verify()
+        self.assertEqual(run.summary()["scored_episodes"], {"A0": 12, "A3": 12})
+        self.assertEqual(run.summary()["by_arm"]["A3"]["safe_successes"], 12)
+        self.assertTrue(all(e["decision"]["reason_code"] is None for e in self.events
+                            if e["record_type"] == "call_finished"))
+
+    def test_truncated_content_shape_without_raw_reasoning_or_action(self):
+        data = response("finish", "length", OUTPUT_LIMIT)
+        body = '{"action":"finish"}' + " " * 100
+        data["choices"][0]["message"]["content"] = body
+        data["choices"][0]["message"]["reasoning"] = "PRIVATE_REASONING"
+        data["usage"]["completion_tokens_details"] = {"reasoning_tokens": 1001}
+        meter = Meter(2.0, lambda _: data, self.events.append,
+                      parser=lambda data: parse_linked(data, ACTION_ONLY_REVISION),
+                      max_calls=MAX_CALLS, max_input_bytes=MAX_INPUT_BYTES)
+        with self.assertRaisesRegex(InvalidModelResponse, "output_limit"):
+            meter.decide(payload_for({}, ACTION_ONLY_REVISION), 1, 0)
+        result = self.events[-1]
+        self.assertIsNone(result["decision"])
+        self.assertEqual(result["reasoning_tokens"], 1001)
+        self.assertEqual(result["content_shape"]["trailing_whitespace_characters"], 100)
+        self.assertEqual(result["content_shape"]["characters"], len(body))
+        self.assertEqual(len(result["content_shape"]["sha256"]), 64)
+        self.assertNotIn("PRIVATE_REASONING", json.dumps(self.events))
+        self.assertNotIn(body, json.dumps(self.events))
+        self.assertEqual(meter.budget.calls, 1)
 
 
 if __name__ == "__main__":
