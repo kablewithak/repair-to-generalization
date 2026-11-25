@@ -59,9 +59,9 @@ def qualification_payload(arm: str, source: FrozenSources, world: Any,
     return {**payload, "max_tokens": OUTPUT_LIMIT}
 
 
-def reservation(payload: dict[str, Any]) -> tuple[int, float]:
+def reservation(payload: dict[str, Any], max_input_bytes: int = INPUT_BYTES_LIMIT) -> tuple[int, float]:
     size = len(json.dumps(payload, ensure_ascii=True).encode("utf-8"))
-    if size > INPUT_BYTES_LIMIT:
+    if size > max_input_bytes:
         raise PilotError("g6_development_input_limit")
     if (payload.get("model") != MODEL or payload.get("max_tokens") != OUTPUT_LIMIT
             or payload.get("reasoning_effort") != "low"):
@@ -85,15 +85,21 @@ def response_metadata(data: dict[str, Any]) -> tuple[str | None, int | None]:
 class Meter:
     """Reserve before IO; unknown billed usage consumes the conservative bound."""
 
-    def __init__(self, cap: float, request: Request, emit: Emit) -> None:
-        self.budget = Budget(max_usd=cap, max_calls=MAX_CALLS)
+    def __init__(self, cap: float, request: Request, emit: Emit, *,
+                 parser: Callable = parse_export_response,
+                 max_calls: int = MAX_CALLS, max_input_bytes: int = INPUT_BYTES_LIMIT) -> None:
+        self.budget = Budget(max_usd=cap, max_calls=max_calls)
+        self.parser = parser
+        self.max_input_bytes = max_input_bytes
+        self.last_usage: Usage | None = None
         self.request = request
         self.emit = emit
         self.reported_usd = 0.0
         self.unknown_reserved_usd = 0.0
 
     def decide(self, payload: dict[str, Any], episode: int, step: int) -> Any:
-        size, upper = reservation(payload)
+        size, upper = reservation(payload, self.max_input_bytes)
+        self.last_usage = None
         if self.budget.spent_usd + upper > self.budget.max_usd:
             raise PilotError("g6_dollar_limit")
         self.budget.reserve(payload)
@@ -113,7 +119,7 @@ class Meter:
             if not isinstance(data, dict):
                 raise PilotError("invalid_http_body")
             finish_reason, reasoning_tokens = response_metadata(data)
-            decision, usage = parse_export_response(data)
+            decision, usage = self.parser(data)
             if data.get("model", MODEL) != MODEL:
                 raise InvalidModelResponse("g6_model_mismatch", usage)
             if (usage.completion_tokens > OUTPUT_LIMIT
@@ -127,6 +133,7 @@ class Meter:
         except PilotError as error:
             failure = error
 
+        self.last_usage = usage
         charged = usage.usd if usage is not None else upper
         if usage is None:
             self.unknown_reserved_usd += charged
