@@ -140,15 +140,19 @@ class MemoryPolicies:
         self._terms = tuple(tokens(group) for group in self._episodes)
         evidence_by_service = {}
         for service in SERVICES:
-            _, aliases, _ = compression_input(ledger, service)
-            evidence_by_service[service] = set(aliases.values())
+            _, aliases, versions = compression_input(ledger, service)
+            evidence_by_service[service] = {event_id: versions[alias]
+                                            for alias, event_id in aliases.items()}
         for lesson in lessons:
             if (type(lesson.lesson) is not str or not lesson.lesson.strip() or len(lesson.lesson) > 1600
                     or not lesson.evidence_ids
                     or len(lesson.evidence_ids) > 12
                     or len(set(lesson.evidence_ids)) != len(lesson.evidence_ids)
-                    or not set(lesson.evidence_ids) <= evidence_by_service[lesson.service]):
+                    or not set(lesson.evidence_ids) <= set(evidence_by_service[lesson.service])):
                 raise ValueError("invalid_frozen_compression")
+            scope = evidence_by_service[lesson.service]
+            if {scope[e] for e in lesson.evidence_ids} != set(scope.values()):
+                raise ValueError("missing_frozen_version_evidence")
 
     def retrieve(self, public: dict) -> list[dict]:
         query = tokens([public["current"], public["current_interactions"]])
@@ -162,7 +166,7 @@ class MemoryPolicies:
             rows = [event for j in candidate for event in self._episodes[j]]
             if len(canonical(rows).encode("utf-8")) <= RETRIEVAL["max_serialized_bytes"]:
                 selected = candidate
-        return [event for i in selected for event in self._episodes[i]]
+        return json.loads(canonical([event for i in selected for event in self._episodes[i]]))
 
     def memory(self, arm: str, public: dict) -> list[dict]:
         if arm == "A0":
