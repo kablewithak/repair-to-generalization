@@ -7,7 +7,6 @@ The failed fixed-history diagnostic remains closed and is not replayed here.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
 from typing import Any
 
 from .experience_ledger import Claim, Ledger, Uncertainty, Validity, canonical, validate_claim
@@ -41,6 +40,8 @@ def scope(ledger: Ledger, episode: int, service: str, version: str):
         raise ValueError("claim_scope_mismatch")
     scopes = {}
     for event in ledger.events:
+        if event.episode > episode:
+            break
         if event.kind == "start":
             scopes[event.episode] = json.loads(event.body_json)["service"]
         if scopes[event.episode] != service:
@@ -75,7 +76,7 @@ def reflection_payload(ledger, episode, service, version, prior):
     if not anchors:
         raise ValueError("no_receipt_evidence")
     context = {"service": service, "current_version": version, "public_interactions": public,
-               "prior_claim": prior.public() if prior else None}
+               "prior_claim": public_claim(prior) if prior else None}
     request = payload_for(context, ACTION_ONLY_REVISION)
     request["messages"][0]["content"] = SYSTEM
     request["response_format"]["json_schema"] = {
@@ -140,7 +141,15 @@ def parse_reflection(data: dict[str, Any], ledger: Ledger, episode: int, service
         raise InvalidModelResponse("closed_loop_claim:" + str(error), usage) from error
 
 
+def public_claim(claim: ReceiptClaim):
+    row = claim.public()
+    # Provenance validation does not establish the truth of semantic advice.
+    row.pop("agent_asserted_validity")
+    row["prediction_status"] = "unknown" if claim.prediction == "unknown" else "unverified_model_hypothesis"
+    return row
+
+
 def active_claims(claims: tuple[ReceiptClaim, ...]):
     latest = {r.claim.service: r for r in claims}
-    return [{"kind": "persistent_agent_claim", "body": r.public()}
+    return [{"kind": "persistent_agent_claim", "body": public_claim(r)}
             for _, r in sorted(latest.items())]
