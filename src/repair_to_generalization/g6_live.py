@@ -28,6 +28,8 @@ from .savant_pilot import (
 )
 
 REVISION = "g6_linked_action_8192_v1"
+ACTION_ONLY_REVISION = "g6_linked_action_only_8192_v2"
+PROTOCOLS = (REVISION, ACTION_ONLY_REVISION)
 SEED = 37
 ARMS = ("A0", "A3")
 MAX_EPISODES = 12 * len(ARMS)
@@ -57,20 +59,34 @@ SCHEMA = {
 }
 
 
+ACTION_ONLY_SCHEMA = {
+    "type": "object", "properties": {"action": SCHEMA["properties"]["action"]},
+    "required": ["action"], "additionalProperties": False,
+}
+
+
+def schema_for(protocol: str) -> dict[str, Any]:
+    if protocol == REVISION:
+        return SCHEMA
+    if protocol == ACTION_ONLY_REVISION:
+        return ACTION_ONLY_SCHEMA
+    raise ValueError("unknown_linked_protocol")
+
+
 @dataclass(frozen=True)
 class LinkedDecision:
     action: Move
-    reason_code: str
+    reason_code: str | None
 
 
-def payload_for(public_request: dict[str, Any]) -> dict[str, Any]:
+def payload_for(public_request: dict[str, Any], protocol: str = REVISION) -> dict[str, Any]:
     return {
         "model": MODEL, "reasoning_effort": "low", "max_tokens": OUTPUT_LIMIT,
         "store": False,
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": canonical(public_request)}],
         "response_format": {"type": "json_schema", "json_schema": {
-            "name": "linked_decision", "strict": True, "schema": SCHEMA,
+            "name": "linked_decision", "strict": True, "schema": schema_for(protocol),
         }},
     }
 
@@ -84,7 +100,8 @@ def unique_object(pairs):
     return row
 
 
-def parse_linked(data: dict[str, Any]) -> tuple[LinkedDecision, Usage]:
+def parse_linked(data: dict[str, Any], protocol: str = REVISION) -> tuple[LinkedDecision, Usage]:
+    required = set(schema_for(protocol)["required"])
     try:
         row = data["usage"]
         prompt, completion = row["prompt_tokens"], row["completion_tokens"]
@@ -107,11 +124,12 @@ def parse_linked(data: dict[str, Any]) -> tuple[LinkedDecision, Usage]:
         if type(content) is not str:
             raise ValueError("invalid_content")
         decision = json.loads(content, object_pairs_hook=unique_object)
-        if not isinstance(decision, dict) or set(decision) != {"action", "reason_code"}:
+        if not isinstance(decision, dict) or set(decision) != required:
             raise ValueError("invalid_decision_fields")
-        if type(decision["reason_code"]) is not str or decision["reason_code"] not in REASONS:
+        reason = decision.get("reason_code")
+        if protocol == REVISION and (type(reason) is not str or reason not in REASONS):
             raise ValueError("invalid_reason_code")
-        return LinkedDecision(Move(decision["action"]), decision["reason_code"]), usage
+        return LinkedDecision(Move(decision["action"]), reason), usage
     except InvalidModelResponse:
         raise
     except (KeyError, TypeError, ValueError, IndexError) as error:
@@ -123,17 +141,18 @@ def case_order(cases: tuple[Scenario, ...]):
             for arm in (ARMS if i % 2 else ARMS[::-1])]
 
 
-def manifest(cases: tuple[Scenario, ...], commit: str, prior: float, cap: float):
+def manifest(cases: tuple[Scenario, ...], commit: str, prior: float, cap: float,
+             protocol: str = REVISION):
     return {
         "record_type": "g6_linked_setup", "gate": "G6",
         "purpose": "development acquisition and headroom; not a held-out comparison",
-        "revision": REVISION, "instrument": VERSION, "commit": commit,
+        "revision": protocol, "instrument": VERSION, "commit": commit,
         "model": MODEL, "reasoning_effort": "low", "max_output_tokens": OUTPUT_LIMIT,
         "max_input_bytes": MAX_INPUT_BYTES, "framing_margin": FRAMING_MARGIN,
         "max_actions": MAX_ACTIONS, "max_calls": MAX_CALLS, "seed": SEED,
         "cases": [asdict(c) for c in cases], "order": case_order(cases),
         "policy": {"A0": "current_only_no_learning", "A3": "own_full_public_history"},
-        "prompt_sha256": hash_value({"system": SYSTEM, "schema": SCHEMA,
+        "prompt_sha256": hash_value({"system": SYSTEM, "schema": schema_for(protocol),
                                      "contract": CONTRACT}),
         "context_target": CONTEXT_TARGET, "fresh_calls_only": True,
         "projected_uncapped_worst_case_usd": WORST_CASE_USD,
@@ -145,7 +164,9 @@ def manifest(cases: tuple[Scenario, ...], commit: str, prior: float, cap: float)
 
 class DevelopmentRun:
     def __init__(self, meter: Meter, emit: Callable[[dict], None],
-                 cases: tuple[Scenario, ...]):
+                 cases: tuple[Scenario, ...], protocol: str = REVISION):
+        schema_for(protocol)
+        self.protocol = protocol
         self.meter, self.emit, self.cases = meter, emit, cases
         self.ledgers = {arm: Ledger() for arm in ARMS}
         self.records: dict[str, list[EpisodeRecord]] = {arm: [] for arm in ARMS}
@@ -167,7 +188,7 @@ class DevelopmentRun:
 
             def decide(request):
                 nonlocal ordinal
-                decision = self.meter.decide(payload_for(request), episode, ordinal)
+                decision = self.meter.decide(payload_for(request, self.protocol), episode, ordinal)
                 usage = self.meter.last_usage
                 if usage is None:
                     raise PilotError("g6_missing_metered_usage")
@@ -233,6 +254,7 @@ def main() -> int:
     parser.add_argument("--prior-spend-usd", type=float, required=True)
     parser.add_argument("--max-usd", type=float, default=1.5)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--protocol", choices=PROTOCOLS, default=ACTION_ONLY_REVISION)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     if not args.live:
@@ -247,7 +269,7 @@ def main() -> int:
     cases = development_stream(SEED)
     commit = subprocess.run(["git", "rev-parse", "HEAD"], check=True,
                             capture_output=True, text=True).stdout.strip()
-    setup = manifest(cases, commit, args.prior_spend_usd, args.max_usd)
+    setup = manifest(cases, commit, args.prior_spend_usd, args.max_usd, args.protocol)
     setup["started_utc"] = datetime.now(timezone.utc).isoformat()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as stream:
@@ -257,8 +279,9 @@ def main() -> int:
 
         emit(setup)
         meter = Meter(args.max_usd, lambda p: subq_request(p, api_key=key), emit,
-                      parser=parse_linked, max_calls=MAX_CALLS, max_input_bytes=MAX_INPUT_BYTES)
-        run = DevelopmentRun(meter, emit, cases)
+                      parser=lambda data: parse_linked(data, args.protocol),
+                      max_calls=MAX_CALLS, max_input_bytes=MAX_INPUT_BYTES)
+        run = DevelopmentRun(meter, emit, cases, args.protocol)
         failure = None
         try:
             run.run()
