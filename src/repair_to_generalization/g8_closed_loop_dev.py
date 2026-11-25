@@ -16,6 +16,7 @@ from .g6_qualification import Meter, OUTPUT_LIMIT, FRAMING_MARGIN, PROJECT_CAP_U
 from .g8_closed_loop_claims import (
     REVISION as CLAIM_REVISION, SYSTEM as REFLECTION_SYSTEM, active_claims, parse_reflection, reflection_payload, scope,
 )
+from .g8_network_resume import REVISION as RESUME_REVISION, ReplayBoundary, load_prefix
 from .linked_world import MAX_ACTIONS, CONTRACT, Scenario
 from .refund_simulator import ToolSemantics
 from .transfer_reconciliation import ReceiptSource
@@ -209,6 +210,7 @@ def main():
     parser.add_argument("--prior-spend-usd", type=float, required=True)
     parser.add_argument("--max-usd", type=float, default=0.50)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--resume-network", type=Path)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     if not args.live:
@@ -217,6 +219,11 @@ def main():
             or not math.isfinite(args.max_usd) or not 0 < args.max_usd <= MAX_RUN_USD
             or args.prior_spend_usd + args.max_usd + RESERVE_USD > PROJECT_CAP_USD):
         parser.error("invalid expenditure envelope")
+    prefix = load_prefix(args.resume_network, setup, Run) if args.resume_network else None
+    if prefix is not None and (
+            args.prior_spend_usd + 1e-12 < prefix.setup["prior_spend_usd"] + prefix.spent_usd
+            or args.max_usd + prefix.spent_usd > prefix.setup["authorized_cap_usd"] + 1e-12):
+        parser.error("invalid continuation expenditure envelope")
     key = os.getenv("SUBQ_API_KEY")
     if not key:
         parser.error("SUBQ_API_KEY missing")
@@ -226,11 +233,18 @@ def main():
         def emit(row):
             stream.write(canonical(row)+"\n")
             stream.flush()
-        emit(dict(setup(commit, args.prior_spend_usd, args.max_usd),
-                  started_utc=datetime.now(timezone.utc).isoformat()))
+        manifest = dict(setup(commit, args.prior_spend_usd, args.max_usd),
+                        started_utc=datetime.now(timezone.utc).isoformat())
+        if prefix is not None:
+            manifest.update(resume_revision=RESUME_REVISION, parent_report_sha256=prefix.sha256,
+                            parent_accounted_usd=prefix.spent_usd, parent_calls=prefix.calls,
+                            parent_scored_episodes=prefix.terminal["episodes"],
+                            max_new_calls=MAX_CALLS - prefix.calls)
+        emit(manifest)
         meter = Meter(args.max_usd, lambda p: subq_request(p, api_key=key), emit,
-                      max_calls=MAX_CALLS, max_input_bytes=MAX_INPUT_BYTES)
-        run = Run(meter, emit)
+                      max_calls=MAX_CALLS - (prefix.calls if prefix else 0), max_input_bytes=MAX_INPUT_BYTES)
+        adapter = ReplayBoundary(prefix, live=meter, emit=emit) if prefix else None
+        run = Run(adapter, adapter.emit) if adapter else Run(meter, emit)
         failure = None
         try:
             run.run()
@@ -248,6 +262,13 @@ def main():
                       and failure is None and replay_valid, calls=meter.budget.calls,
                       reported_usd=meter.reported_usd, unknown_reserved_usd=meter.unknown_reserved_usd,
                       accounted_usd=meter.budget.spent_usd, report=str(args.output))
+        if prefix is not None:
+            result.update(parent_report_sha256=prefix.sha256, parent_scored_episodes=prefix.terminal["episodes"],
+                          chain_calls=prefix.calls + result["calls"],
+                          chain_reported_usd=prefix.terminal["reported_usd"] + result["reported_usd"],
+                          chain_unknown_reserved_usd=prefix.terminal["unknown_reserved_usd"]
+                          + result["unknown_reserved_usd"],
+                          chain_accounted_usd=prefix.spent_usd + result["accounted_usd"])
         emit(result)
     print(json.dumps(result, indent=2))
     return 0 if failure is None and replay_valid and result["episodes"] == len(order()) else 1
