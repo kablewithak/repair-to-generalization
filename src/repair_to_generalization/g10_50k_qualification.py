@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .experience_ledger import canonical, hash_value, replay
-from .g6_live import ACTION_ONLY_REVISION, payload_for
+from .g6_live import ACTION_ONLY_REVISION, parse_linked, payload_for
 from .g6_qualification import OUTPUT_LIMIT, FRAMING_MARGIN, PROJECT_CAP_USD, RESERVE_USD
 from .g7_source import SourceRun, load_source
 from .g8_independent import TransportMeter, NETWORK_RECOVERIES
@@ -123,6 +123,7 @@ class ExtensionRun(SourceRun):
     def __init__(self, source, meter, emit):
         validate_design(source)
         super().__init__(meter,emit)
+        meter.parser = lambda data: parse_linked(data, ACTION_ONLY_REVISION)
         self.source = source
         self.ledger = source.ledger
         self.cases = list(source.cases)
