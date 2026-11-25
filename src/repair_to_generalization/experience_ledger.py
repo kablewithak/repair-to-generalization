@@ -83,7 +83,7 @@ def request_for(world, history, prior, access):
 
 
 def execute(case: Scenario, prior: Ledger, episode: int, learning: bool, access: Access,
-            decide: Callable[[dict], Move]):
+            decide: Callable[[dict], Move], *, observe: Callable[[dict], None] | None = None):
     if type(learning) is not bool or type(episode) is not int or episode < 1:
         raise ValueError("invalid_episode_configuration")
     if prior.events and episode <= prior.events[-1].episode:
@@ -102,6 +102,8 @@ def execute(case: Scenario, prior: Ledger, episode: int, learning: bool, access:
         row = {"action": move.value, "observation": observation}
         history.append(row)
         actions.append(move)
+        if observe is not None:
+            observe(json.loads(canonical(row)))
         if learning:
             result_ledger = result_ledger.append(episode, "step", row)
     if learning:
