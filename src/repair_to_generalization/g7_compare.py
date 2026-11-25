@@ -33,9 +33,9 @@ from .study_design import (
     ARMS, MAX_INPUT_BYTES, REPETITIONS, SERVICES, STOP_RULE,
     case_signature, combined_cases, episode_order, split_manifest, stratum,
 )
-from .study_memory import MemoryPolicies, compression_payload, parse_compression
+from .study_memory import MEMORY_REVISION, MemoryPolicies, compression_payload, parse_compression
 
-REVISION = "study_i_main_v1"
+REVISION = "study_i_main_v2"
 MAX_RUN_USD = 3.5
 COMPRESSION_CAP_USD = 0.15
 MAIN_ORDER = episode_order("main")
@@ -64,6 +64,8 @@ def setup_for(source: FrozenSource, commit: str, prior: float, cap: float):
         "record_type": "g7_main_setup", "revision": REVISION, "gate": "G7",
         "purpose": "predeclared fixed-history reconstruction main screen",
         "commit": commit, "model": MODEL, "protocol": ACTION_ONLY_REVISION,
+        "memory_revision": MEMORY_REVISION,
+        "compression_prompt_sha256": hash_value({s: compression_payload(source.ledger, s) for s in SERVICES}),
         "source_report_sha256": source.sha256, "source_ledger_head": source.ledger.head,
         "source_events": len(source.ledger.events), "source_replayed": True,
         "source_acquisition_episodes": len(source.cases),

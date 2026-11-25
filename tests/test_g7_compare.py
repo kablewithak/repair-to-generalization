@@ -40,7 +40,7 @@ def fake_compress(payload):
         elif event["kind"] == "step":
             aliases.setdefault(version[event["episode"]], event["event_id"])
     return model_response({"lesson": "Offline test lesson, not live evidence.",
-                           "evidence": list(aliases.values())})
+                           "evidence_v1": aliases["v1"], "evidence_v2": aliases["v2"]})
 
 
 class StudyTests(unittest.TestCase):
@@ -68,10 +68,21 @@ class StudyTests(unittest.TestCase):
         self.assertEqual(set(versions.values()), {"v1", "v2"})
         self.assertTrue(all(row["body"].get("service", service) == service
                             for row in public["public_interactions"]))
+        v1 = next(a for a, v in versions.items() if v == "v1")
+        v2 = next(a for a, v in versions.items() if v == "v2")
+        schema = compression_payload(ledger, service)["response_format"]["json_schema"]["schema"]
+        self.assertEqual(set(schema["properties"]["evidence_v1"]["enum"]),
+                         {a for a, v in versions.items() if v == "v1"})
+        self.assertEqual(set(schema["properties"]["evidence_v2"]["enum"]),
+                         {a for a, v in versions.items() if v == "v2"})
+        candidate = {"lesson": "Offline valid lesson.", "evidence_v1": v1, "evidence_v2": v2}
+        lesson, usage = parse_compression(model_response(candidate), ledger, service)
+        self.assertEqual(lesson.evidence_ids, (aliases[v1], aliases[v2]))
         for candidate in (
-            {"lesson": "fabricated", "evidence": ["fake"]},
-            {"lesson": "one version", "evidence": [next(iter(aliases))]},
-            {"lesson": "x" * 1601, "evidence": list(aliases)[:2]},
+            {"lesson": "fabricated", "evidence_v1": "fake", "evidence_v2": v2},
+            {"lesson": "wrong version", "evidence_v1": v2, "evidence_v2": v2},
+            {"lesson": "missing version", "evidence_v1": v1},
+            {"lesson": "x" * 1601, "evidence_v1": v1, "evidence_v2": v2},
         ):
             with self.assertRaises(InvalidModelResponse):
                 parse_compression(model_response(candidate), ledger, service)

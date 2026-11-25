@@ -15,23 +15,17 @@ from .g6_live import ACTION_ONLY_REVISION, payload_for, unique_object
 from .savant_pilot import InvalidModelResponse, Usage
 from .study_design import RETRIEVAL, SERVICES
 
-MEMORY_REVISION = "study_i_memory_v1"
-COMPRESSION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "lesson": {"type": "string"},
-        "evidence": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["lesson", "evidence"],
-    "additionalProperties": False,
-}
+MEMORY_REVISION = "study_i_memory_v2"
+COMPRESSION_FIELDS = ("lesson", "evidence_v1", "evidence_v2")
 COMPRESSION_SYSTEM = (
     "Compress your own public interaction history for this service into one short "
     "advisory lesson (at most 1600 characters). Include version-specific "
     "applicability, evidence of changed assumptions, uncertainty and observed "
     "failure patterns where supported. Never invent hidden facts or evaluator "
-    "feedback. Cite 1 to 12 distinct step aliases from the supplied history "
-    "including evidence from each observed version. Return only the JSON schema."
+    "feedback. Select one supporting step alias per version using the two "
+    "evidence fields. These are representative provenance anchors, not an "
+    "exhaustive proof of every statement. Keep the lesson self-contained; "
+    "do not put step aliases in its prose. Return only the JSON schema."
 )
 
 
@@ -66,12 +60,24 @@ def compression_input(ledger: Ledger, service: str):
     return {"service": service, "public_interactions": public}, aliases, versions
 
 
+def compression_schema(versions: dict[str, str]) -> dict:
+    choices = {version: sorted(alias for alias, v in versions.items() if v == version)
+               for version in ("v1", "v2")}
+    if set(versions.values()) != set(choices) or not all(choices.values()):
+        raise ValueError("compression_requires_both_versions")
+    return {"type": "object", "properties": {
+        "lesson": {"type": "string"},
+        "evidence_v1": {"type": "string", "enum": choices["v1"]},
+        "evidence_v2": {"type": "string", "enum": choices["v2"]},
+    }, "required": list(COMPRESSION_FIELDS), "additionalProperties": False}
+
+
 def compression_payload(ledger: Ledger, service: str):
-    public, _, _ = compression_input(ledger, service)
+    public, _, versions = compression_input(ledger, service)
     request = payload_for(public, ACTION_ONLY_REVISION)
     request["messages"][0]["content"] = COMPRESSION_SYSTEM
     request["response_format"]["json_schema"] = {
-        "name": "compressed_experience", "strict": True, "schema": COMPRESSION_SCHEMA,
+        "name": "compressed_experience_v2", "strict": True, "schema": compression_schema(versions),
     }
     return request
 
@@ -107,19 +113,20 @@ def parse_compression(data: dict[str, Any], ledger: Ledger,
         if choice["finish_reason"] != "stop":
             raise InvalidModelResponse("unexpected_finish_reason", usage)
         body = json.loads(choice["message"]["content"], object_pairs_hook=unique_object)
-        if not isinstance(body, dict) or set(body) != {"lesson", "evidence"}:
+        if not isinstance(body, dict) or set(body) != set(COMPRESSION_FIELDS):
             raise ValueError("invalid_compression_fields")
-        lesson, refs = body["lesson"], body["evidence"]
+        lesson = body["lesson"]
         if type(lesson) is not str or not lesson.strip() or len(lesson) > 1600:
             raise ValueError("invalid_compression_length")
         _, aliases, versions = compression_input(ledger, service)
-        if (type(refs) is not list or not 1 <= len(refs) <= 12
-                or any(type(ref) is not str or ref not in aliases for ref in refs)
-                or len(set(refs)) != len(refs)):
-            raise ValueError("invalid_compression_evidence")
-        if {versions[ref] for ref in refs} != set(versions.values()):
-            raise ValueError("missing_version_evidence")
-        return CompressedLesson(service, lesson, tuple(aliases[ref] for ref in refs)), usage
+        schema = compression_schema(versions)
+        refs = []
+        for field in ("evidence_v1", "evidence_v2"):
+            ref = body[field]
+            if type(ref) is not str or ref not in schema["properties"][field]["enum"]:
+                raise ValueError("invalid_compression_" + field)
+            refs.append(aliases[ref])
+        return CompressedLesson(service, lesson, tuple(refs)), usage
     except InvalidModelResponse:
         raise
     except (KeyError, TypeError, ValueError, IndexError) as error:
@@ -145,13 +152,12 @@ class MemoryPolicies:
                                             for alias, event_id in aliases.items()}
         for lesson in lessons:
             if (type(lesson.lesson) is not str or not lesson.lesson.strip() or len(lesson.lesson) > 1600
-                    or not lesson.evidence_ids
-                    or len(lesson.evidence_ids) > 12
+                    or len(lesson.evidence_ids) != 2
                     or len(set(lesson.evidence_ids)) != len(lesson.evidence_ids)
                     or not set(lesson.evidence_ids) <= set(evidence_by_service[lesson.service])):
                 raise ValueError("invalid_frozen_compression")
             scope = evidence_by_service[lesson.service]
-            if {scope[e] for e in lesson.evidence_ids} != set(scope.values()):
+            if tuple(scope[e] for e in lesson.evidence_ids) != ("v1", "v2"):
                 raise ValueError("missing_frozen_version_evidence")
 
     def retrieve(self, public: dict) -> list[dict]:
@@ -191,8 +197,8 @@ class MemoryPolicies:
             "source_ledger_head": self.ledger.head,
             "source_events": len(self.ledger.events),
             "source_sha256": hash_value(self.ledger.public()),
-            "compression_prompt_sha256": hash_value({"system": COMPRESSION_SYSTEM,
-                                                       "schema": COMPRESSION_SCHEMA}),
+            "compression_prompt_sha256": hash_value({service: compression_payload(self.ledger, service)
+                                                      for service in SERVICES}),
             "compressed_lessons": [asdict(lesson) for lesson in self.lessons],
             "compressed_sha256": hash_value([asdict(lesson) for lesson in self.lessons]),
             "retrieval_sha256": hash_value(RETRIEVAL),
