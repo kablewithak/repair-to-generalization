@@ -119,7 +119,7 @@ def replay_source(rows, sha):
                    accounted_usd=meter.spent_usd,transport_recoveries=0)
     require(same(terminal["streams"],[summary]) and same(terminal["main"],main_screen([summary])),
             "source_summary")
-    require(same(events[-1],dict(summary,record_type="g8_rep_stream_finished",
+    require(same(dict(events[-1],seed=seed),dict(summary,record_type="g8_rep_stream_finished",
                     frozen_ledgers={a:l.public() for a,l in run.ledgers.items()},
                     frozen_claims=[asdict(c) for c in run.claims])), "source_frozen_state")
     require(len(run.rows)==17 and len(run.claims)==4 and
