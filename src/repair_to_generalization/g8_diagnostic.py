@@ -15,6 +15,9 @@ from .experience_ledger import Access, canonical, execute, hash_value
 from .g6_live import ACTION_ONLY_REVISION, parse_linked, payload_for
 from .g6_qualification import Meter, OUTPUT_LIMIT, FRAMING_MARGIN, PROJECT_CAP_USD, RESERVE_USD
 from .g7_source import load_source
+from .g8_reflection_resume import (
+    REVISION as RESUME_REVISION, load_prefix, finish_reflection, retry_payload,
+)
 from .g8_claims import REVISION as CLAIM_REVISION, claim_payload, diagnose, parse_claim, public_scope, snapshot
 from .linked_world import CONTRACT, MAX_ACTIONS, Scenario
 from .savant_pilot import MODEL, PilotError, subq_request
@@ -235,6 +238,7 @@ def main():
     parser.add_argument("--prior-spend-usd", type=float, required=True)
     parser.add_argument("--max-usd", type=float, default=1.25)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--resume-reflection", type=Path)
     parser.add_argument("--live", action="store_true")
     args = parser.parse_args()
     if not args.live:
@@ -245,11 +249,25 @@ def main():
             or not math.isfinite(args.max_usd) or not REFLECTION_CAP_USD < args.max_usd <= MAX_RUN_USD
             or args.prior_spend_usd + args.max_usd + RESERVE_USD > PROJECT_CAP_USD):
         parser.error("invalid expenditure envelope")
+    prefix = (load_prefix(source, args.resume_reflection, setup_for)
+              if args.resume_reflection is not None else None)
+    if prefix is not None and (
+            args.prior_spend_usd + 1e-12 < prefix.prior_usd + prefix.spent_usd
+            or args.max_usd + prefix.spent_usd > prefix.cap_usd + 1e-12
+            or prefix.reflection_cap_usd <= prefix.spent_usd):
+        parser.error("invalid continuation expenditure envelope")
     key = os.getenv("SUBQ_API_KEY")
     if not key:
         parser.error("SUBQ_API_KEY missing")
     commit = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
     setup = setup_for(source, commit, args.prior_spend_usd, args.max_usd)
+    if prefix is not None:
+        setup.update(resume_revision=RESUME_REVISION,
+                     parent_report_sha256=prefix.report_sha256,
+                     parent_accounted_usd=prefix.spent_usd, parent_calls=prefix.calls,
+                     preserved_claims=9, reflection_calls=1,
+                     reflection_cap_usd=prefix.reflection_cap_usd - prefix.spent_usd,
+                     retry_payload_sha256=hash_value(retry_payload(source, prefix)))
     setup["started_utc"] = datetime.now(timezone.utc).isoformat()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("x", encoding="utf-8") as stream:
@@ -259,12 +277,16 @@ def main():
 
         request = lambda p: subq_request(p, api_key=key)
         emit(setup)
-        reflection = Meter(REFLECTION_CAP_USD, request, lambda r: emit({"meter_phase": "reflection", **r}),
-                           max_calls=REFLECTION_CALLS, max_input_bytes=MAX_INPUT_BYTES)
+        reflection = Meter(setup["reflection_cap_usd"], request,
+                           lambda r: emit({"meter_phase": "reflection", **r}),
+                           max_calls=setup["reflection_calls"], max_input_bytes=MAX_INPUT_BYTES)
         meter, run, failure = None, None, None
-        diagnostics = []
+        diagnostics = list(prefix.diagnostics) if prefix is not None else []
         try:
-            snapshots, diagnostics = reflect(source, reflection, emit)
+            if prefix is None:
+                snapshots, diagnostics = reflect(source, reflection, emit)
+            else:
+                snapshots, diagnostics = finish_reflection(source, prefix, reflection, emit, ARMS)
             meter = Meter(args.max_usd - reflection.budget.spent_usd, request,
                           lambda r: emit({"meter_phase": "decision", **r}),
                           parser=lambda d: parse_linked(d, ACTION_ONLY_REVISION),
@@ -282,6 +304,10 @@ def main():
                       reported_usd=sum(m.reported_usd for m in meters),
                       unknown_reserved_usd=sum(m.unknown_reserved_usd for m in meters),
                       accounted_usd=sum(m.budget.spent_usd for m in meters), report=str(args.output))
+        if prefix is not None:
+            result.update(parent_report_sha256=prefix.report_sha256,
+                          preserved_claims=9, chain_calls=prefix.calls + result["calls"],
+                          chain_accounted_usd=prefix.spent_usd + result["accounted_usd"])
         emit(result)
     print(json.dumps(result, indent=2))
     return 0 if failure is None and result["diagnostic_complete"] else 1
