@@ -20,12 +20,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .experience_ledger import Access, canonical, execute, hash_value
-from .g6_live import ACTION_ONLY_REVISION, parse_linked
+from .g6_live import ACTION_ONLY_REVISION, parse_linked, payload_for
 from .g6_qualification import (
     Meter, OUTPUT_LIMIT, FRAMING_MARGIN, PROJECT_CAP_USD, RESERVE_USD,
 )
 from .g7_source import FrozenSource, load_source
-from .linked_world import MAX_ACTIONS, Move
+from .linked_world import CONTRACT, MAX_ACTIONS
 from .savant_pilot import (
     MODEL, INPUT_PER_MILLION, OUTPUT_PER_MILLION, PilotError, subq_request,
 )
@@ -74,6 +74,8 @@ def setup_for(source: FrozenSource, commit: str, prior: float, cap: float):
         "max_actions": MAX_ACTIONS, "max_output_tokens": OUTPUT_LIMIT,
         "max_input_bytes": MAX_INPUT_BYTES, "framing_margin": FRAMING_MARGIN,
         "reasoning_effort": "low", "fresh_calls_only": True,
+        "decision_prompt_sha256": hash_value({"payload": payload_for({}, ACTION_ONLY_REVISION),
+                                               "contract": CONTRACT}),
         "authorized_cap_usd": cap, "compression_cap_usd": COMPRESSION_CAP_USD,
         "prior_spend_usd": prior, "reserve_usd": RESERVE_USD,
         "project_cap_usd": PROJECT_CAP_USD, "projected_uncapped_worst_case_usd": WORST_CASE_USD,
