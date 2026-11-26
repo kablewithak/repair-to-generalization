@@ -10,13 +10,14 @@ from repair_to_generalization.g10_scaling import (
 from repair_to_generalization.g10_reproduce import verify
 from repair_to_generalization.g8_independent import TransportMeter
 from repair_to_generalization.savant_pilot import PilotError
-from test_g10_scaling import ScalingTests
+import test_g10_scaling as scaling_fixtures
 from test_g8_closed_loop_dev import provider,response
 
 
 class ReleaseReplayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        ScalingTests=scaling_fixtures.ScalingTests
         ScalingTests.setUpClass()
         cls.base,cls.full=ScalingTests.base,ScalingTests.full
         cls.lessons=ScalingTests.policies.retrievers[25].lessons
