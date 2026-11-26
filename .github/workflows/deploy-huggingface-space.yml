@@ -1,0 +1,121 @@
+name: Deploy research Space
+on:
+  pull_request:
+    paths:
+      - 'space/**'
+      - '.github/workflows/deploy-huggingface-space.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'space/**'
+      - '.github/workflows/deploy-huggingface-space.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate static publication and evidence boundary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('space')
+          expected = {'README.md', 'index.html', 'styles.css', 'app.js',
+                      'evidence.js', 'export_evidence.py'}
+          assert root.is_dir() and not root.is_symlink(), 'Missing Space source'
+          assert {p.name for p in root.iterdir()} == expected, 'Unexpected or missing Space files'
+          for name in expected:
+              p = root / name
+              assert p.is_file() and not p.is_symlink(), name
+              assert 0 < p.stat().st_size < 1_000_000, name
+              p.read_text(encoding='utf-8')
+          readme = (root / 'README.md').read_text(encoding='utf-8')
+          front = readme.split('---', 2)
+          assert len(front) == 3 and front[0] == ''
+          assert 'sdk: static' in front[1].splitlines()
+          assert 'app_file: index.html' in front[1].splitlines()
+          html = (root / 'index.html').read_text(encoding='utf-8')
+          for name in ('styles.css', 'app.js', 'evidence.js'):
+              assert name in html, f'Missing HTML reference: {name}'
+          text = (root / 'evidence.js').read_text(encoding='utf-8')
+          prefix = '/* Generated allowlisted evidence. Do not edit by hand. */\nwindow.RESEARCH_EVIDENCE = '
+          assert text.startswith(prefix) and text.rstrip().endswith(';')
+          data = json.loads(text[len(prefix):].rstrip()[:-1])
+          assert set(data) == {'sources', 'traces', 'claims', 'g7', 'g8', 'g9', 'g10'}
+          assert len(data['sources']) == 5
+          assert sum(len(t['runs']) for t in data['traces']) == 4
+          matrix = data['g7']['matrix']
+          assert len(matrix) == data['g7']['planned'] == 144
+          assert len({(r['repetition'], r['case'], r['arm']) for r in matrix}) == 144
+          assert sum(r['status'] != 'unscored' for r in matrix) == data['g7']['scored'] == 59
+          assert data['g10']['scored'] == 87 and data['g10']['planned'] == 162
+          compile((root / 'export_evidence.py').read_text(encoding='utf-8'), 'export_evidence.py', 'exec')
+          print('Static publication and evidence checks passed.')
+          PY
+          node --check space/app.js
+          node --check space/evidence.js
+
+  deploy:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: research-space-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Publish only static runtime files
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          set -euo pipefail
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::Set the HF_TOKEN repository Actions secret with write access to the research Space."
+            exit 1
+          fi
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          cat > "$work/askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'KaboKableMolefe' ;;
+            *Password*) printf '%s\n' "$HF_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          SH
+          chmod 700 "$work/askpass"
+          export GIT_ASKPASS="$work/askpass"
+          git -c credential.helper= clone --depth 1 --branch main https://huggingface.co/spaces/KaboKableMolefe/from-repair-to-generalization "$work/space"
+          for file in README.md index.html styles.css app.js evidence.js; do
+            cp "space/$file" "$work/space/$file"
+          done
+          git -C "$work/space" add -- README.md index.html styles.css app.js evidence.js
+          if git -C "$work/space" diff --cached --quiet; then
+            echo 'Space already matches the GitHub release.'
+            exit 0
+          fi
+          git -C "$work/space" config user.name 'Research Space CI'
+          git -C "$work/space" config user.email 'github-actions[bot]@users.noreply.github.com'
+          git -C "$work/space" commit -m "Publish research Space from GitHub ${GITHUB_SHA}"
+          git -C "$work/space" -c credential.helper= push origin HEAD:main
+          echo 'Published static runtime files to the research Space.'
