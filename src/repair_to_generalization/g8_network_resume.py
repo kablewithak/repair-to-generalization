@@ -77,6 +77,12 @@ class ReplayBoundary:
         self.last_usage = self.live.last_usage
         return decision
 
+    def accepted_body(self, payload, decision):
+        if payload["response_format"]["json_schema"]["name"] == "closed_loop_receipt_prediction":
+            return {"prediction": decision["prediction"], "advice": decision["advice"],
+                    "evidence": decision["anchor"]}
+        return {"action": decision["action"]}
+
     def decide(self, payload, episode, step):
         self.last_usage = None
         if self.crossed:
@@ -135,11 +141,7 @@ class ReplayBoundary:
         self.spent_usd += u.usd
         self.reported_usd += u.usd
         decision = done["decision"]
-        if payload["response_format"]["json_schema"]["name"] == "closed_loop_receipt_prediction":
-            body = {"prediction": decision["prediction"], "advice": decision["advice"],
-                    "evidence": decision["anchor"]}
-        else:
-            body = {"action": decision["action"]}
+        body = self.accepted_body(payload, decision)
         # Revalidate parsed fields, not fabricated raw responses or provider attestations.
         response = {"choices": [{"finish_reason": "stop", "message": {"content": canonical(body)}}],
                     "usage": {"prompt_tokens": u.prompt_tokens, "completion_tokens": u.completion_tokens,
