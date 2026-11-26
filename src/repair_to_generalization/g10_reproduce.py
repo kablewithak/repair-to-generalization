@@ -27,6 +27,18 @@ class TaggedReplay(FailedSourceReplay):
         self.identity=identity
         self.finished_calls=[]
 
+    def accepted_body(self,payload,decision):
+        if payload["response_format"]["json_schema"]["name"]=="scale_scope_compression":
+            # The stored lesson contains the immutable event ID rather than its alias.
+            service=self.identity["service"]
+            _,anchors=extra_payload(self.full,service)
+            require(decision["service"]==service and len(decision["evidence_ids"])==1,
+                    "release_extra_lesson_identity")
+            aliases=[a for a,e in anchors.items() if e==decision["evidence_ids"][0]]
+            require(len(aliases)==1,"release_extra_lesson_anchor")
+            return {"lesson":decision["lesson"],"evidence":aliases[0]}
+        return super().accepted_body(payload,decision)
+
     def take(self,kind):
         row=super().take(kind)
         if kind in ("call_started","call_finished"):
@@ -51,6 +63,7 @@ def verify(base,full,lessons,claims,extension_cost,rows,sha):
     prefix=Prefix(sha,manifest,tuple(rows[1:-1]),terminal)
     identity={}
     meter=TaggedReplay(prefix,identity)
+    meter.full=full
     extras=[]
     for i,service in enumerate(SCOPES,1):
         identity.clear()
